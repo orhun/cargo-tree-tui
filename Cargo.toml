@@ -1,6 +1,17 @@
 [package]
 name = "cargo-tree-tui"
+description = "Display an interactive tree visualization of a dependency graph"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+anyhow = "1.0.100"
+cargo_metadata = "0.23.1"
+crossterm = "0.29.0"
+ratatui = "0.29.0"
+clap = { version = "4.5.53", features = ["derive"] }
+clap-cargo = "0.18.3"
+
+[[bin]]
+name = "cargo-tree-tui"
+path = "src/bin/cargo/main.rs"
