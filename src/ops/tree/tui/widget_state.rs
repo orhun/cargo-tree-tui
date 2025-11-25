@@ -11,6 +11,8 @@ pub struct TreeWidgetState {
     pub open: HashSet<NodeId>,
     /// Currently selected node.
     pub selected: Option<NodeId>,
+    /// Viewport height for page-based navigation (set by the widget during render).
+    pub viewport_height: usize,
 }
 
 /// Visible node metadata used for navigation.
@@ -58,6 +60,218 @@ impl TreeWidgetState {
             && current_index > 0
         {
             self.selected = Some(visible[current_index - 1].id);
+        }
+    }
+
+    /// Moves the selection to the first visible dependency.
+    pub fn select_first(&mut self, tree: &DependencyTree) {
+        let visible = match self.ensure_selection(tree) {
+            Some(visible) => visible,
+            None => return,
+        };
+
+        if !visible.is_empty() {
+            self.selected = Some(visible[0].id);
+        }
+    }
+
+    /// Moves the selection to the last visible dependency.
+    pub fn select_last(&mut self, tree: &DependencyTree) {
+        let visible = match self.ensure_selection(tree) {
+            Some(visible) => visible,
+            None => return,
+        };
+
+        if let Some(last) = visible.last() {
+            self.selected = Some(last.id);
+        }
+    }
+
+    /// Moves selection down by half a page.
+    pub fn select_half_page_down(&mut self, tree: &DependencyTree) {
+        let jump = (self.viewport_height / 2).max(1);
+        self.select_by_offset(tree, jump as isize);
+    }
+
+    /// Moves selection up by half a page.
+    pub fn select_half_page_up(&mut self, tree: &DependencyTree) {
+        let jump = (self.viewport_height / 2).max(1);
+        self.select_by_offset(tree, -(jump as isize));
+    }
+
+    /// Moves selection down by a full page.
+    pub fn select_page_down(&mut self, tree: &DependencyTree) {
+        let jump = self.viewport_height.max(1);
+        self.select_by_offset(tree, jump as isize);
+    }
+
+    /// Moves selection up by a full page.
+    pub fn select_page_up(&mut self, tree: &DependencyTree) {
+        let jump = self.viewport_height.max(1);
+        self.select_by_offset(tree, -(jump as isize));
+    }
+
+    /// Moves selection by a signed offset (positive = down, negative = up).
+    fn select_by_offset(&mut self, tree: &DependencyTree, offset: isize) {
+        let visible = match self.ensure_selection(tree) {
+            Some(visible) => visible,
+            None => return,
+        };
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        if let Some(current_index) = Self::selected_index(&visible, selected) {
+            let new_index = if offset >= 0 {
+                (current_index + offset as usize).min(visible.len().saturating_sub(1))
+            } else {
+                current_index.saturating_sub((-offset) as usize)
+            };
+            self.selected = Some(visible[new_index].id);
+        }
+    }
+
+    /// Jumps to the parent of the currently selected node.
+    pub fn select_parent(&mut self, tree: &DependencyTree) {
+        if self.ensure_selection(tree).is_none() {
+            return;
+        }
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        if let Some(node) = tree.node(selected)
+            && let Some(parent) = node.parent
+        {
+            self.selected = Some(parent);
+        }
+    }
+
+    /// Jumps to the next sibling at the same depth.
+    pub fn select_next_sibling(&mut self, tree: &DependencyTree) {
+        let visible = match self.ensure_selection(tree) {
+            Some(visible) => visible,
+            None => return,
+        };
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        let Some(current_index) = Self::selected_index(&visible, selected) else {
+            return;
+        };
+
+        let current_depth = visible[current_index].depth;
+
+        // Find next node at the same depth
+        for node in visible.iter().skip(current_index + 1) {
+            if node.depth == current_depth {
+                self.selected = Some(node.id);
+                return;
+            }
+            // If we encounter a shallower node, there are no more siblings
+            if node.depth < current_depth {
+                break;
+            }
+        }
+    }
+
+    /// Jumps to the previous sibling at the same depth.
+    pub fn select_previous_sibling(&mut self, tree: &DependencyTree) {
+        let visible = match self.ensure_selection(tree) {
+            Some(visible) => visible,
+            None => return,
+        };
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        let Some(current_index) = Self::selected_index(&visible, selected) else {
+            return;
+        };
+
+        let current_depth = visible[current_index].depth;
+
+        // Find previous node at the same depth
+        for node in visible.iter().take(current_index).rev() {
+            if node.depth == current_depth {
+                self.selected = Some(node.id);
+                return;
+            }
+            // If we encounter a shallower node, there are no more siblings
+            if node.depth < current_depth {
+                break;
+            }
+        }
+    }
+
+    /// Toggles the expanded state of the currently selected node.
+    pub fn toggle(&mut self, tree: &DependencyTree) {
+        if self.ensure_selection(tree).is_none() {
+            return;
+        }
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        let Some(node) = tree.node(selected) else {
+            return;
+        };
+
+        if node.children.is_empty() {
+            return;
+        }
+
+        if self.open.contains(&selected) {
+            self.open.remove(&selected);
+        } else {
+            self.open.insert(selected);
+        }
+    }
+
+    /// Recursively expands all descendants of the selected node.
+    pub fn expand_all(&mut self, tree: &DependencyTree) {
+        if self.ensure_selection(tree).is_none() {
+            return;
+        }
+
+        let selected = match self.selected {
+            Some(id) => id,
+            None => return,
+        };
+
+        self.expand_recursive(tree, selected);
+    }
+
+    fn expand_recursive(&mut self, tree: &DependencyTree, id: NodeId) {
+        let Some(node) = tree.node(id) else {
+            return;
+        };
+
+        if !node.children.is_empty() {
+            self.open.insert(id);
+            for &child in &node.children {
+                self.expand_recursive(tree, child);
+            }
+        }
+    }
+
+    /// Collapses all nodes in the tree.
+    pub fn collapse_all(&mut self, tree: &DependencyTree) {
+        self.open.clear();
+        // Move selection to first root if available
+        if let Some(&first_root) = tree.roots().first() {
+            self.selected = Some(first_root);
         }
     }
 

@@ -10,37 +10,71 @@ use crate::core::{Dependency, DependencyTree, NodeId};
 
 use super::widget_state::TreeWidgetState;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Color Palette - Soft, readable colors inspired by modern terminal themes
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Warm amber for selection - easy on the eyes
+const HIGHLIGHT: Color = Color::Rgb(255, 183, 77);
+/// Soft teal for versions
+const VERSION: Color = Color::Rgb(77, 208, 180);
+/// Muted lavender for metadata/suffixes
+const SUFFIX: Color = Color::Rgb(180, 142, 255);
+/// Dim gray for tree structure
+const TREE_BRANCH: Color = Color::Rgb(88, 92, 112);
+/// Soft coral for expand indicator
+const EXPAND_INDICATOR: Color = Color::Rgb(255, 121, 121);
+/// Soft green for collapse indicator
+const COLLAPSE_INDICATOR: Color = Color::Rgb(105, 219, 124);
+
 /// Visual configuration for [`TreeWidget`].
 #[derive(Debug)]
 pub struct TreeWidgetStyle {
+    /// Style for selected/highlighted node name
     highlight_style: Style,
+    /// Default text style
     style: Style,
+    /// Package name style
     name_style: Style,
+    /// Version number style
     version_style: Style,
+    /// Suffix/metadata style (proc-macro, paths)
     suffix_style: Style,
+    /// Tree branch connector style
+    branch_style: Style,
+    /// Tree symbols
     branch_symbol: &'static str,
     last_branch_symbol: &'static str,
     continuation_symbol: &'static str,
     empty_symbol: &'static str,
+    /// Expand/collapse indicators
+    expanded_indicator: &'static str,
+    collapsed_indicator: &'static str,
+    leaf_indicator: &'static str,
+    expanded_style: Style,
+    collapsed_style: Style,
 }
 
-/// TODO: Use styles defined in <https://docs.rs/clap-cargo/latest/clap_cargo/style/index.html>
-/// This requires using the `anstyle` feature of Ratatui, which is not released yet.
-/// See <https://github.com/orhun/cargo-tree-tui/issues/9>
 impl Default for TreeWidgetStyle {
     fn default() -> Self {
         Self {
             highlight_style: Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow),
+                .fg(HIGHLIGHT)
+                .add_modifier(Modifier::BOLD),
             style: Style::default(),
             name_style: Style::default(),
-            version_style: Style::default().fg(Color::Green),
-            suffix_style: Style::default().fg(Color::Cyan),
-            branch_symbol: "├── ",
-            last_branch_symbol: "└── ",
-            continuation_symbol: "│   ",
-            empty_symbol: "    ",
+            version_style: Style::default().fg(VERSION),
+            suffix_style: Style::default().fg(SUFFIX),
+            branch_style: Style::default().fg(TREE_BRANCH),
+            branch_symbol: "├─",
+            last_branch_symbol: "└─",
+            continuation_symbol: "│ ",
+            empty_symbol: "  ",
+            expanded_indicator: "▾ ",
+            collapsed_indicator: "▸ ",
+            leaf_indicator: "  ",
+            expanded_style: Style::default().fg(COLLAPSE_INDICATOR),
+            collapsed_style: Style::default().fg(EXPAND_INDICATOR),
         }
     }
 }
@@ -141,6 +175,9 @@ impl StatefulWidget for TreeWidget<'_> {
         let total_lines = state.visible_nodes(self.tree).len() + root_line_offset;
 
         let viewport = Viewport::new(area, self.block.as_ref(), position_line, total_lines);
+
+        // Update viewport height for page-based navigation
+        state.viewport_height = viewport.height;
         let mut lines: Vec<Line> = Vec::new();
         let mut lineage = Vec::new();
 
@@ -229,14 +266,23 @@ impl<'a> TreeWidget<'a> {
 
         let is_open = state.open.contains(&node_id);
         let is_selected = state.selected == Some(node_id);
+        let has_children = !node.children.is_empty();
 
         let show_connector = allow_root_connector || !lineage.is_empty();
         let indent = Self::make_indent(lineage, style);
-        let rendered =
-            RenderedNode::build(node, is_selected, is_last, &indent, show_connector, style);
+        let rendered = RenderedNode::build(
+            node,
+            is_selected,
+            is_last,
+            is_open,
+            has_children,
+            &indent,
+            show_connector,
+            style,
+        );
         lines.push(rendered.line);
 
-        if is_open && !node.children.is_empty() {
+        if is_open && has_children {
             lineage.push(!is_last);
             Self::render_children(lines, tree, &node.children, state, lineage, style, true);
             lineage.pop();
@@ -324,37 +370,59 @@ struct RenderedNode<'a> {
 
 impl<'a> RenderedNode<'a> {
     /// Builds a rendered node line.
+    #[allow(clippy::too_many_arguments)]
     fn build(
         node: &Dependency,
         is_selected: bool,
         is_last: bool,
+        is_open: bool,
+        has_children: bool,
         indent: &str,
         show_connector: bool,
         style: &TreeWidgetStyle,
     ) -> Self {
         let mut spans = Vec::new();
 
+        // Tree branch connectors
         if show_connector {
             let connector = if is_last {
                 style.last_branch_symbol
             } else {
                 style.branch_symbol
             };
-            spans.push(Span::styled(format!("{indent}{connector}"), style.style));
+            spans.push(Span::styled(
+                format!("{indent}{connector}"),
+                style.branch_style,
+            ));
         }
 
+        // Expand/collapse indicator
+        if has_children {
+            let (indicator, indicator_style) = if is_open {
+                (style.expanded_indicator, style.expanded_style)
+            } else {
+                (style.collapsed_indicator, style.collapsed_style)
+            };
+            spans.push(Span::styled(indicator, indicator_style));
+        } else {
+            spans.push(Span::styled(style.leaf_indicator, style.style));
+        }
+
+        // Package name
         let name_style = if is_selected {
             style.highlight_style
         } else {
             style.name_style
         };
-
         spans.push(Span::styled(node.name.clone(), name_style));
+
+        // Version
         spans.push(Span::styled(
             format!(" v{}", node.version),
             style.version_style,
         ));
 
+        // Suffixes (proc-macro, path)
         if let Some(extra) = Self::format_suffixes(node, style) {
             spans.extend(extra);
         }
@@ -378,14 +446,14 @@ impl<'a> RenderedNode<'a> {
         }
 
         let mut spans = Vec::new();
-        spans.push(Span::styled(" (", style.style));
+        spans.push(Span::styled(" (", style.branch_style));
         for (idx, suffix) in suffixes.iter().enumerate() {
             if idx > 0 {
-                spans.push(Span::styled(", ", style.style));
+                spans.push(Span::styled(", ", style.branch_style));
             }
             spans.push(Span::styled(suffix.clone(), style.suffix_style));
         }
-        spans.push(Span::styled(")", style.style));
+        spans.push(Span::styled(")", style.branch_style));
 
         Some(spans)
     }
