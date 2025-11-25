@@ -56,18 +56,18 @@ pub struct TreeWidget<'a> {
 }
 
 /// Viewport information for rendering the tree widget.
-#[derive(Debug)]
-struct Viewport {
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct Viewport {
     /// The full area allocated for the widget.
-    area: Rect,
+    pub area: Rect,
     /// The inner area after accounting for borders and padding.
-    inner: Rect,
+    pub inner: Rect,
     /// Height of the inner area.
-    height: usize,
+    pub height: usize,
     /// Current scroll offset.
-    offset: usize,
+    pub offset: usize,
     /// Maximum scroll offset.
-    max_offset: usize,
+    pub max_offset: usize,
 }
 
 impl Viewport {
@@ -141,6 +141,8 @@ impl StatefulWidget for TreeWidget<'_> {
         let total_lines = state.visible_nodes(self.tree).len() + root_line_offset;
 
         let viewport = Viewport::new(area, self.block.as_ref(), position_line, total_lines);
+        state.update_viewport(viewport);
+
         let mut lines: Vec<Line> = Vec::new();
         let mut lineage = Vec::new();
 

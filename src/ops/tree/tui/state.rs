@@ -38,6 +38,12 @@ impl TuiState {
                 self.tree_widget_state
                     .select_previous(&self.dependency_tree);
             }
+            KeyCode::PageDown => {
+                self.tree_widget_state.page_down(&self.dependency_tree);
+            }
+            KeyCode::PageUp => {
+                self.tree_widget_state.page_up(&self.dependency_tree);
+            }
             KeyCode::Right => {
                 self.tree_widget_state.expand(&self.dependency_tree);
             }
