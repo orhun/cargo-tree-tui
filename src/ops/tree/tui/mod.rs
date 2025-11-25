@@ -3,11 +3,11 @@ pub mod widget;
 pub mod widget_state;
 
 use ratatui::{
+    Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarOrientation},
-    Frame,
 };
 
 use state::TuiState;
@@ -38,7 +38,9 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
 }
 
 fn draw_tree(frame: &mut Frame, state: &mut TuiState, area: Rect) {
-    let visible = state.tree_widget_state.visible_nodes(&state.dependency_tree);
+    let visible = state
+        .tree_widget_state
+        .visible_nodes(&state.dependency_tree);
     let position = state
         .tree_widget_state
         .selected_position(&state.dependency_tree)
@@ -46,10 +48,7 @@ fn draw_tree(frame: &mut Frame, state: &mut TuiState, area: Rect) {
         .unwrap_or(0);
     let total = visible.len();
 
-    let title = format!(
-        " {} ",
-        state.dependency_tree.workspace_name
-    );
+    let title = format!(" {} ", state.dependency_tree.workspace_name);
     let counter = format!(" {}/{} ", position, total);
 
     let block = Block::default()
@@ -57,12 +56,17 @@ fn draw_tree(frame: &mut Frame, state: &mut TuiState, area: Rect) {
         .border_style(Style::default().fg(BORDER_COLOR))
         .title(Span::styled(
             title,
-            Style::default().fg(TITLE_COLOR).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(TITLE_COLOR)
+                .add_modifier(Modifier::BOLD),
         ))
-        .title_bottom(Line::from(vec![Span::styled(
-            counter,
-            Style::default().fg(HELP_DESC_COLOR),
-        )]).right_aligned());
+        .title_bottom(
+            Line::from(vec![Span::styled(
+                counter,
+                Style::default().fg(HELP_DESC_COLOR),
+            )])
+            .right_aligned(),
+        );
 
     let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
         .thumb_symbol("┃")
@@ -125,30 +129,39 @@ fn draw_help_panel(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, panel_area);
 
     let help_sections = vec![
-        ("Navigation", vec![
-            ("↑ / k", "Move up"),
-            ("↓ / j", "Move down"),
-            ("← / h", "Collapse / go to parent"),
-            ("→ / l", "Expand / go to first child"),
-            ("p", "Jump to parent"),
-            ("[ / ]", "Previous / next sibling"),
-        ]),
-        ("Fast Movement", vec![
-            ("gg / Home", "Go to first item"),
-            ("G / End", "Go to last item"),
-            ("Ctrl+u / Ctrl+d", "Half page up / down"),
-            ("PgUp / PgDn", "Full page up / down"),
-        ]),
-        ("Expand/Collapse", vec![
-            ("o / Space / Enter", "Toggle node"),
-            ("O", "Expand all children"),
-            ("c", "Collapse entire tree"),
-            ("1-9", "Expand to depth level"),
-        ]),
-        ("General", vec![
-            ("?", "Toggle this help"),
-            ("q / Esc", "Quit"),
-        ]),
+        (
+            "Navigation",
+            vec![
+                ("↑ / k", "Move up"),
+                ("↓ / j", "Move down"),
+                ("← / h", "Collapse / go to parent"),
+                ("→ / l", "Expand / go to first child"),
+                ("p", "Jump to parent"),
+                ("[ / ]", "Previous / next sibling"),
+            ],
+        ),
+        (
+            "Fast Movement",
+            vec![
+                ("gg / Home", "Go to first item"),
+                ("G / End", "Go to last item"),
+                ("Ctrl+u / Ctrl+d", "Half page up / down"),
+                ("PgUp / PgDn", "Full page up / down"),
+            ],
+        ),
+        (
+            "Expand/Collapse",
+            vec![
+                ("o / Space / Enter", "Toggle node"),
+                ("O", "Expand all children"),
+                ("c", "Collapse entire tree"),
+                ("1-9", "Expand to depth level"),
+            ],
+        ),
+        (
+            "General",
+            vec![("?", "Toggle this help"), ("q / Esc", "Quit")],
+        ),
     ];
 
     let mut lines = vec![Line::from("")];

@@ -58,9 +58,7 @@ pub struct TreeWidgetStyle {
 impl Default for TreeWidgetStyle {
     fn default() -> Self {
         Self {
-            highlight_style: Style::default()
-                .fg(HIGHLIGHT)
-                .add_modifier(Modifier::BOLD),
+            highlight_style: Style::default().fg(HIGHLIGHT).add_modifier(Modifier::BOLD),
             style: Style::default(),
             name_style: Style::default(),
             version_style: Style::default().fg(VERSION),
@@ -90,18 +88,18 @@ pub struct TreeWidget<'a> {
 }
 
 /// Viewport information for rendering the tree widget.
-#[derive(Debug)]
-struct Viewport {
+#[derive(Debug, Copy, Clone, Default)]
+pub(crate) struct Viewport {
     /// The full area allocated for the widget.
-    area: Rect,
+    pub area: Rect,
     /// The inner area after accounting for borders and padding.
-    inner: Rect,
+    pub inner: Rect,
     /// Height of the inner area.
-    height: usize,
+    pub height: usize,
     /// Current scroll offset.
-    offset: usize,
+    pub offset: usize,
     /// Maximum scroll offset.
-    max_offset: usize,
+    pub max_offset: usize,
 }
 
 impl Viewport {
@@ -175,9 +173,8 @@ impl StatefulWidget for TreeWidget<'_> {
         let total_lines = state.visible_nodes(self.tree).len() + root_line_offset;
 
         let viewport = Viewport::new(area, self.block.as_ref(), position_line, total_lines);
+        state.update_viewport(viewport);
 
-        // Update viewport height for page-based navigation
-        state.viewport_height = viewport.height;
         let mut lines: Vec<Line> = Vec::new();
         let mut lineage = Vec::new();
 

@@ -1,6 +1,9 @@
 use std::collections::HashSet;
 
-use crate::core::{DependencyTree, NodeId};
+use crate::{
+    core::{DependencyTree, NodeId},
+    ops::tree::tui::widget::Viewport,
+};
 
 /// [`TreeWidget`] state that tracks open nodes and the current selection.
 ///
@@ -11,8 +14,8 @@ pub struct TreeWidgetState {
     pub open: HashSet<NodeId>,
     /// Currently selected node.
     pub selected: Option<NodeId>,
-    /// Viewport height for page-based navigation (set by the widget during render).
-    pub viewport_height: usize,
+    /// Current viewport for page-based navigation.
+    viewport: Viewport,
 }
 
 /// Visible node metadata used for navigation.
@@ -89,25 +92,25 @@ impl TreeWidgetState {
 
     /// Moves selection down by half a page.
     pub fn select_half_page_down(&mut self, tree: &DependencyTree) {
-        let jump = (self.viewport_height / 2).max(1);
+        let jump = (self.viewport.height / 2).max(1);
         self.select_by_offset(tree, jump as isize);
     }
 
     /// Moves selection up by half a page.
     pub fn select_half_page_up(&mut self, tree: &DependencyTree) {
-        let jump = (self.viewport_height / 2).max(1);
+        let jump = (self.viewport.height / 2).max(1);
         self.select_by_offset(tree, -(jump as isize));
     }
 
     /// Moves selection down by a full page.
     pub fn select_page_down(&mut self, tree: &DependencyTree) {
-        let jump = self.viewport_height.max(1);
+        let jump = self.viewport.height.max(1);
         self.select_by_offset(tree, jump as isize);
     }
 
     /// Moves selection up by a full page.
     pub fn select_page_up(&mut self, tree: &DependencyTree) {
-        let jump = self.viewport_height.max(1);
+        let jump = self.viewport.height.max(1);
         self.select_by_offset(tree, -(jump as isize));
     }
 
@@ -406,5 +409,10 @@ impl TreeWidgetState {
     /// Helper to find the index of the selected node in the visible list.
     fn selected_index(visible: &[VisibleNode], target: NodeId) -> Option<usize> {
         visible.iter().position(|node| node.id == target)
+    }
+
+    /// Updates the available viewport.
+    pub(crate) fn update_viewport(&mut self, viewport: Viewport) {
+        self.viewport = viewport;
     }
 }
