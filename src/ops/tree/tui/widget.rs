@@ -231,15 +231,20 @@ impl<'a> TreeWidget<'a> {
 
         let is_open = state.open.contains(&node_id);
         let is_selected = state.selected == Some(node_id);
+        let is_root = node.parent.is_none();
 
-        let show_connector = allow_root_connector || !lineage.is_empty();
+        let show_connector = !is_root && (allow_root_connector || !lineage.is_empty());
         let indent = Self::make_indent(lineage, style);
         let rendered =
             RenderedNode::build(node, is_selected, is_last, &indent, show_connector, style);
         lines.push(rendered.line);
 
         if is_open && !node.children.is_empty() {
-            lineage.push(!is_last);
+            if is_root {
+                lineage.push(false);
+            } else {
+                lineage.push(!is_last);
+            }
             Self::render_children(lines, tree, &node.children, state, lineage, style, true);
             lineage.pop();
         }
