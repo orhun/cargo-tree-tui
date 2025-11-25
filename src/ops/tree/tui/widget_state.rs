@@ -114,6 +114,69 @@ impl TreeWidgetState {
         }
     }
 
+    /// Moves the selection to the parent node, if any.
+    pub fn select_parent(&mut self, tree: &DependencyTree) {
+        let Some(selected) = self.selected else {
+            return;
+        };
+
+        if let Some(node) = tree.node(selected)
+            && let Some(parent) = node.parent
+        {
+            self.selected = Some(parent);
+        }
+    }
+
+    /// Moves the selection to the next sibling, if any.
+    pub fn select_next_sibling(&mut self, tree: &DependencyTree) {
+        let Some(selected) = self.selected else {
+            return;
+        };
+        let Some(node) = tree.node(selected) else {
+            return;
+        };
+
+        let Some(parent) = node.parent else {
+            return;
+        };
+        let Some(parent_node) = tree.node(parent) else {
+            return;
+        };
+
+        let Some(pos) = parent_node.children.iter().position(|&id| id == selected) else {
+            return;
+        };
+
+        if pos + 1 < parent_node.children.len() {
+            self.selected = Some(parent_node.children[pos + 1]);
+        }
+    }
+
+    /// Moves the selection to the previous sibling, if any.
+    pub fn select_previous_sibling(&mut self, tree: &DependencyTree) {
+        let Some(selected) = self.selected else {
+            return;
+        };
+        let Some(node) = tree.node(selected) else {
+            return;
+        };
+
+        let Some(parent) = node.parent else {
+            return;
+        };
+        let Some(parent_node) = tree.node(parent) else {
+            return;
+        };
+
+        let Some(pos) = parent_node.children.iter().position(|&id| id == selected) else {
+            return;
+        };
+
+        if pos > 0 {
+            self.selected = Some(parent_node.children[pos - 1]);
+        }
+    }
+
     /// Moves the selection up by approximately one page.
     pub fn page_up(&mut self, tree: &DependencyTree) {
         let step = self.viewport.height.saturating_sub(1).max(1) as isize;

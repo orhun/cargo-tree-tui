@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::core::DependencyTree;
 
@@ -27,27 +27,38 @@ impl TuiState {
     }
 
     pub fn handle_key_event(&mut self, key_event: KeyEvent) {
-        match key_event.code {
-            KeyCode::Char('q') => {
+        match (key_event.code, key_event.modifiers) {
+            (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
-            KeyCode::Down => {
+            (KeyCode::Char('p'), _) => {
+                self.tree_widget_state.select_parent(&self.dependency_tree);
+            }
+            (KeyCode::Down, mods) if mods.contains(KeyModifiers::CONTROL) => {
+                self.tree_widget_state
+                    .select_next_sibling(&self.dependency_tree);
+            }
+            (KeyCode::Up, mods) if mods.contains(KeyModifiers::CONTROL) => {
+                self.tree_widget_state
+                    .select_previous_sibling(&self.dependency_tree);
+            }
+            (KeyCode::Down, _) => {
                 self.tree_widget_state.select_next(&self.dependency_tree);
             }
-            KeyCode::Up => {
+            (KeyCode::Up, _) => {
                 self.tree_widget_state
                     .select_previous(&self.dependency_tree);
             }
-            KeyCode::PageDown => {
+            (KeyCode::PageDown, _) => {
                 self.tree_widget_state.page_down(&self.dependency_tree);
             }
-            KeyCode::PageUp => {
+            (KeyCode::PageUp, _) => {
                 self.tree_widget_state.page_up(&self.dependency_tree);
             }
-            KeyCode::Right => {
+            (KeyCode::Right, _) => {
                 self.tree_widget_state.expand(&self.dependency_tree);
             }
-            KeyCode::Left => {
+            (KeyCode::Left, _) => {
                 self.tree_widget_state.collapse(&self.dependency_tree);
             }
             _ => {}
