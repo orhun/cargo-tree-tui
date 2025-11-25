@@ -2,13 +2,17 @@ use anyhow::Result;
 use crossterm::event::{self, Event};
 
 use cargo_tree_tui::ops::tree::tui::{draw_tui, state::TuiState};
+use ratatui::{TerminalOptions, Viewport};
 
 use crate::cli::TreeArgs;
 
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
     let mut state = TuiState::new(args.manifest_path)?;
-    let mut terminal = ratatui::init();
+
+    let mut terminal = ratatui::init_with_options(TerminalOptions {
+        viewport: Viewport::Inline(20),
+    });
 
     while state.running {
         terminal.draw(|frame| draw_tui(frame, &mut state))?;
