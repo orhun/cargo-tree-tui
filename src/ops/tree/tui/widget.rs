@@ -70,6 +70,27 @@ pub(crate) struct Viewport {
     pub max_offset: usize,
 }
 
+/// Lineage information for a dependency node.
+#[derive(Debug)]
+struct Lineage {
+    /// For each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
+    segments: Vec<bool>,
+    /// Whether the current node is the last child of its parent.
+    is_last: bool,
+    /// Whether this node is the currently selected one.
+    is_selected: bool,
+}
+
+impl Lineage {
+    fn depth(&self) -> usize {
+        self.segments.len()
+    }
+
+    fn has_segments(&self) -> bool {
+        !self.segments.is_empty()
+    }
+}
+
 impl Viewport {
     fn new(
         area: Rect,
@@ -250,33 +271,27 @@ impl<'a> TreeWidget<'a> {
         style: &TreeWidgetStyle,
     ) -> Option<Line<'a>> {
         let node_data = tree.node(node.id)?;
-        let (lineage, is_last) = Self::build_lineage(tree, node.id)?;
+        let lineage = Self::build_lineage(tree, node.id, selected)?;
 
         let is_root = node_data.parent.is_none();
-        let allow_root_connector = if lineage.len() <= 1 {
+        let allow_root_connector = if lineage.depth() <= 1 {
             root_label_present
         } else {
             true
         };
-        let show_connector = !is_root && (allow_root_connector || !lineage.is_empty());
+        let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
         let indent = Self::make_indent(&lineage, style);
-        let rendered = RenderedNode::build(
-            node_data,
-            selected == Some(node.id),
-            is_last,
-            &indent,
-            show_connector,
-            style,
-        );
+        let rendered = RenderedNode::build(node_data, &lineage, &indent, show_connector, style);
         Some(rendered.line)
     }
 
-    /// Builds lineage information:
-    ///
-    /// - `Vec<bool>`: for each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
-    /// - `bool`: whether the current node is the last child of its parent.
-    fn build_lineage(tree: &DependencyTree, node_id: NodeId) -> Option<(Vec<bool>, bool)> {
+    /// Builds lineage information.
+    fn build_lineage(
+        tree: &DependencyTree,
+        node_id: NodeId,
+        selected: Option<NodeId>,
+    ) -> Option<Lineage> {
         let node = tree.node(node_id)?;
 
         // Is this node the last among its siblings?
@@ -307,12 +322,17 @@ impl<'a> TreeWidget<'a> {
         }
 
         lineage.reverse();
-        Some((lineage, is_last))
+        Some(Lineage {
+            segments: lineage,
+            is_last,
+            is_selected: selected == Some(node_id),
+        })
     }
 
     /// Generates indentation based on lineage.
-    fn make_indent(lineage: &[bool], style: &TreeWidgetStyle) -> String {
+    fn make_indent(lineage: &Lineage, style: &TreeWidgetStyle) -> String {
         lineage
+            .segments
             .iter()
             .map(|&has_more| {
                 if has_more {
@@ -399,8 +419,7 @@ impl<'a> RenderedNode<'a> {
     /// Builds a rendered node line.
     fn build(
         node: &Dependency,
-        is_selected: bool,
-        is_last: bool,
+        lineage: &Lineage,
         indent: &str,
         show_connector: bool,
         style: &TreeWidgetStyle,
@@ -408,7 +427,7 @@ impl<'a> RenderedNode<'a> {
         let mut spans = Vec::new();
 
         if show_connector {
-            let connector = if is_last {
+            let connector = if lineage.is_last {
                 style.last_branch_symbol
             } else {
                 style.branch_symbol
@@ -416,7 +435,7 @@ impl<'a> RenderedNode<'a> {
             spans.push(Span::styled(format!("{indent}{connector}"), style.style));
         }
 
-        let name_style = if is_selected {
+        let name_style = if lineage.is_selected {
             style.highlight_style
         } else {
             style.name_style
