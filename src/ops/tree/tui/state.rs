@@ -18,7 +18,7 @@ impl TuiState {
     pub fn new(manifest_path: Option<PathBuf>) -> Result<Self> {
         let dependency_tree = DependencyTree::load(manifest_path)?;
         let mut tree_widget_state = TreeWidgetState::default();
-        tree_widget_state.open_to_depth(&dependency_tree, 3);
+        tree_widget_state.expand_all(&dependency_tree);
         Ok(TuiState {
             running: true,
             dependency_tree,

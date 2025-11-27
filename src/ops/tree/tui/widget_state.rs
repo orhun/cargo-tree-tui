@@ -8,7 +8,7 @@ use crate::{
 /// [`TreeWidget`] state that tracks open nodes and the current selection.
 ///
 /// [`TreeWidget`]: crate::util::tui::tree_widget::TreeWidget
-#[derive(Debug, Clone, Default)]
+#[derive(Debug)]
 pub struct TreeWidgetState {
     /// Set of expanded nodes.
     pub open: HashSet<NodeId>,
@@ -16,6 +16,10 @@ pub struct TreeWidgetState {
     pub selected: Option<NodeId>,
     /// Current viewport.
     viewport: Viewport,
+    /// Cached visible nodes.
+    visible_cache: Vec<VisibleNode>,
+    /// Indicates whether the visible cache is outdated.
+    dirty: bool,
 }
 
 /// Visible node metadata used for navigation.
@@ -27,48 +31,76 @@ pub struct VisibleNode {
     pub depth: usize,
 }
 
+impl Default for TreeWidgetState {
+    fn default() -> Self {
+        Self {
+            open: HashSet::new(),
+            selected: None,
+            viewport: Viewport::default(),
+            visible_cache: Vec::new(),
+            dirty: true,
+        }
+    }
+}
+
 impl TreeWidgetState {
     /// Moves the selection to the next visible dependency.
     pub fn select_next(&mut self, tree: &DependencyTree) {
-        let visible = match self.ensure_selection(tree) {
-            Some(visible) => visible,
-            None => return,
-        };
+        if !self.ensure_selection(tree) {
+            return;
+        }
 
         let selected = match self.selected {
             Some(id) => id,
             None => return,
         };
 
-        if let Some(current_index) = Self::selected_index(&visible, selected)
-            && current_index + 1 < visible.len()
-        {
-            self.selected = Some(visible[current_index + 1].id);
+        let next = {
+            let visible = self.visible_nodes(tree);
+            let Some(current_index) = Self::selected_index(visible, selected) else {
+                return;
+            };
+
+            visible.get(current_index + 1).map(|node| node.id)
+        };
+
+        if let Some(next_id) = next {
+            self.selected = Some(next_id);
         }
     }
 
     /// Moves the selection to the previous visible dependency.
     pub fn select_previous(&mut self, tree: &DependencyTree) {
-        let visible = match self.ensure_selection(tree) {
-            Some(visible) => visible,
-            None => return,
-        };
+        if !self.ensure_selection(tree) {
+            return;
+        }
 
         let selected = match self.selected {
             Some(id) => id,
             None => return,
         };
 
-        if let Some(current_index) = Self::selected_index(&visible, selected)
-            && current_index > 0
-        {
-            self.selected = Some(visible[current_index - 1].id);
+        let previous = {
+            let visible = self.visible_nodes(tree);
+            let Some(current_index) = Self::selected_index(visible, selected) else {
+                return;
+            };
+
+            if current_index > 0 {
+                Some(visible[current_index - 1].id)
+            } else {
+                None
+            }
+        };
+
+        if let Some(previous_id) = previous {
+            self.selected = Some(previous_id);
         }
     }
 
     /// Expands the selected node or moves into its first child when already expanded.
     pub fn expand(&mut self, tree: &DependencyTree) {
-        if self.ensure_selection(tree).is_none() {
+        if !self.ensure_selection(tree) {
             return;
         }
 
@@ -86,6 +118,7 @@ impl TreeWidgetState {
         }
 
         if self.open.insert(selected) {
+            self.dirty = true;
             return;
         }
 
@@ -94,7 +127,7 @@ impl TreeWidgetState {
 
     /// Collapses the selected node or moves focus to its parent when already closed.
     pub fn collapse(&mut self, tree: &DependencyTree) {
-        if self.ensure_selection(tree).is_none() {
+        if !self.ensure_selection(tree) {
             return;
         }
 
@@ -104,6 +137,7 @@ impl TreeWidgetState {
         };
 
         if self.open.remove(&selected) {
+            self.dirty = true;
             return;
         }
 
@@ -191,33 +225,39 @@ impl TreeWidgetState {
 
     /// Moves the selection by a specified delta.
     fn move_by(&mut self, tree: &DependencyTree, delta: isize) {
-        let visible = match self.ensure_selection(tree) {
-            Some(visible) => visible,
-            None => return,
-        };
+        if !self.ensure_selection(tree) {
+            return;
+        }
 
         let selected = match self.selected {
             Some(id) => id,
             None => return,
         };
 
-        let Some(current_index) = Self::selected_index(&visible, selected) else {
-            return;
+        let next = {
+            let visible = self.visible_nodes(tree);
+            let Some(current_index) = Self::selected_index(visible, selected) else {
+                return;
+            };
+
+            let len = visible.len() as isize;
+            if len == 0 {
+                return;
+            }
+
+            let mut next_index = current_index as isize + delta;
+            if next_index < 0 {
+                next_index = 0;
+            } else if next_index >= len {
+                next_index = len - 1;
+            }
+
+            visible.get(next_index as usize).map(|node| node.id)
         };
 
-        let len = visible.len() as isize;
-        if len == 0 {
-            return;
+        if let Some(next_id) = next {
+            self.selected = Some(next_id);
         }
-
-        let mut next_index = current_index as isize + delta;
-        if next_index < 0 {
-            next_index = 0;
-        } else if next_index >= len {
-            next_index = len - 1;
-        }
-
-        self.selected = Some(visible[next_index as usize].id);
     }
 
     /// Opens all nodes up to the specified depth.
@@ -229,7 +269,8 @@ impl TreeWidgetState {
         for &root in tree.roots() {
             self.open_node(tree, root, 1, max_depth);
         }
-        let _ = self.ensure_selection(tree);
+        self.dirty = true;
+        self.ensure_selection(tree);
     }
 
     fn open_node(&mut self, tree: &DependencyTree, id: NodeId, depth: usize, max_depth: usize) {
@@ -245,17 +286,25 @@ impl TreeWidgetState {
         }
     }
 
-    /// Returns visible nodes along with their depth in the hierarchy.
-    pub fn visible_nodes(&self, tree: &DependencyTree) -> Vec<VisibleNode> {
-        let mut out = Vec::new();
-        for &root in tree.roots() {
-            self.collect_visible(tree, root, 0, &mut out);
+    /// Returns cached visible nodes along with their depth in the hierarchy.
+    pub fn visible_nodes(&mut self, tree: &DependencyTree) -> &[VisibleNode] {
+        if self.dirty {
+            self.rebuild_visible(tree);
+            self.dirty = false;
         }
-        out
+        &self.visible_cache
+    }
+
+    fn rebuild_visible(&mut self, tree: &DependencyTree) {
+        self.visible_cache.clear();
+        let open = &self.open;
+        for &root in tree.roots() {
+            Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+        }
     }
 
     fn collect_visible(
-        &self,
+        open: &HashSet<NodeId>,
         tree: &DependencyTree,
         id: NodeId,
         depth: usize,
@@ -263,41 +312,47 @@ impl TreeWidgetState {
     ) {
         out.push(VisibleNode { id, depth });
 
-        if !self.open.contains(&id) {
+        if !open.contains(&id) {
             return;
         }
 
         if let Some(node) = tree.node(id) {
             for &child in &node.children {
-                self.collect_visible(tree, child, depth + 1, out);
+                Self::collect_visible(open, tree, child, depth + 1, out);
             }
         }
     }
 
     /// Ensures the selection points to a valid visible node, defaulting to the first entry.
-    fn ensure_selection(&mut self, tree: &DependencyTree) -> Option<Vec<VisibleNode>> {
-        let visible = self.visible_nodes(tree);
+    ///
+    /// Returns `true` if a valid selection exists after the operation.
+    fn ensure_selection(&mut self, tree: &DependencyTree) -> bool {
+        let _ = self.visible_nodes(tree);
 
-        if visible.is_empty() {
+        if self.visible_cache.is_empty() {
             self.selected = None;
-            return None;
+            return false;
         }
 
         if let Some(selected) = self.selected
-            && visible.iter().any(|node| node.id == selected)
+            && self.visible_cache.iter().any(|node| node.id == selected)
         {
-            return Some(visible);
+            return true;
         }
 
-        self.selected = Some(visible[0].id);
-        Some(visible)
+        self.selected = Some(self.visible_cache[0].id);
+        true
     }
 
     /// Returns the index of the selected node among visible nodes.
     pub fn selected_position(&mut self, tree: &DependencyTree) -> Option<usize> {
-        let visible = self.ensure_selection(tree)?;
+        if !self.ensure_selection(tree) {
+            return None;
+        }
+
         let selected = self.selected?;
-        Self::selected_index(&visible, selected)
+        let visible = self.visible_nodes(tree);
+        Self::selected_index(visible, selected)
     }
 
     /// Helper to find the index of the selected node in the visible list.
@@ -308,5 +363,15 @@ impl TreeWidgetState {
     /// Updates the available viewport.
     pub(crate) fn update_viewport(&mut self, viewport: Viewport) {
         self.viewport = viewport;
+    }
+
+    /// Expands all nodes in the tree.
+    pub fn expand_all(&mut self, tree: &DependencyTree) {
+        self.open.clear();
+        for i in 0..tree.nodes.len() {
+            self.open.insert(NodeId(i));
+        }
+        self.dirty = true;
+        self.ensure_selection(tree);
     }
 }
