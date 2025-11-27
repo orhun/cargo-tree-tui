@@ -18,6 +18,8 @@ pub struct TreeWidgetStyle {
     name_style: Style,
     version_style: Style,
     suffix_style: Style,
+    node_closed_symbol: char,
+    node_open_symbol: char,
     branch_symbol: &'static str,
     last_branch_symbol: &'static str,
     continuation_symbol: &'static str,
@@ -37,6 +39,8 @@ impl Default for TreeWidgetStyle {
             name_style: Style::default(),
             version_style: Style::default().fg(Color::Green),
             suffix_style: Style::default().fg(Color::Cyan),
+            node_closed_symbol: '▸',
+            node_open_symbol: '▾',
             branch_symbol: "├── ",
             last_branch_symbol: "└── ",
             continuation_symbol: "│   ",
@@ -233,9 +237,14 @@ impl<'a> TreeWidget<'a> {
             let max_nodes = available.min(visible_nodes.len());
 
             for node in visible_nodes.iter().take(max_nodes) {
-                if let Some(line) =
-                    Self::render_visible_node(tree, node, selected, root_label_present, style)
-                {
+                if let Some(line) = Self::render_visible_node(
+                    tree,
+                    node,
+                    state,
+                    selected,
+                    root_label_present,
+                    style,
+                ) {
                     lines.push(line);
                 }
             }
@@ -251,8 +260,14 @@ impl<'a> TreeWidget<'a> {
             for flat_id in start_flat..end_flat {
                 let node_id = flat_id.saturating_sub(root_line_offset);
                 if let Some(node) = visible_nodes.get(node_id)
-                    && let Some(line) =
-                        Self::render_visible_node(tree, node, selected, root_label_present, style)
+                    && let Some(line) = Self::render_visible_node(
+                        tree,
+                        node,
+                        state,
+                        selected,
+                        root_label_present,
+                        style,
+                    )
                 {
                     lines.push(line);
                 }
@@ -266,12 +281,15 @@ impl<'a> TreeWidget<'a> {
     fn render_visible_node(
         tree: &DependencyTree,
         node: &VisibleNode,
+        state: &TreeWidgetState,
         selected: Option<NodeId>,
         root_label_present: bool,
         style: &TreeWidgetStyle,
     ) -> Option<Line<'a>> {
         let node_data = tree.node(node.id)?;
         let lineage = Self::build_lineage(tree, node.id, selected)?;
+        let has_children = !node_data.children.is_empty();
+        let is_open = state.open.contains(&node.id);
 
         let is_root = node_data.parent.is_none();
         let allow_root_connector = if lineage.depth() <= 1 {
@@ -282,7 +300,15 @@ impl<'a> TreeWidget<'a> {
         let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
         let indent = Self::make_indent(&lineage, style);
-        let rendered = RenderedNode::build(node_data, &lineage, &indent, show_connector, style);
+        let rendered = RenderedNode::build(
+            node_data,
+            &lineage,
+            &indent,
+            show_connector,
+            has_children,
+            is_open,
+            style,
+        );
         Some(rendered.line)
     }
 
@@ -422,9 +448,21 @@ impl<'a> RenderedNode<'a> {
         lineage: &Lineage,
         indent: &str,
         show_connector: bool,
+        has_children: bool,
+        is_open: bool,
         style: &TreeWidgetStyle,
     ) -> Self {
         let mut spans = Vec::new();
+
+        let toggle = if has_children {
+            if is_open {
+                format!("{} ", style.node_open_symbol)
+            } else {
+                format!("{} ", style.node_closed_symbol)
+            }
+        } else {
+            "".to_string()
+        };
 
         if show_connector {
             let connector = if lineage.is_last {
@@ -432,7 +470,10 @@ impl<'a> RenderedNode<'a> {
             } else {
                 style.branch_symbol
             };
-            spans.push(Span::styled(format!("{indent}{connector}"), style.style));
+            spans.push(Span::styled(
+                format!("{indent}{connector}{toggle}"),
+                style.style,
+            ));
         }
 
         let name_style = if lineage.is_selected {
