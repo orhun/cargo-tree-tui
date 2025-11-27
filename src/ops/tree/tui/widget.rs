@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::core::{Dependency, DependencyTree, NodeId};
 
-use super::widget_state::TreeWidgetState;
+use super::widget_state::{TreeWidgetState, VisibleNode};
 
 /// Visual configuration for [`TreeWidget`].
 #[derive(Debug)]
@@ -83,7 +83,7 @@ impl Viewport {
         let mut offset = if height == 0 {
             0
         } else {
-            let center_line = if height == 0 { 0 } else { height.div_ceil(2) };
+            let center_line = height.div_ceil(2);
             selected_line.saturating_sub(center_line)
         };
 
@@ -92,6 +92,7 @@ impl Viewport {
         } else {
             total_lines.saturating_sub(height)
         };
+
         offset = offset.min(max_offset);
 
         Self {
@@ -135,46 +136,42 @@ impl StatefulWidget for TreeWidget<'_> {
     type State = TreeWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let root_line_offset = usize::from(self.root_label.is_some());
-        let position = state.selected_position(self.tree).unwrap_or_default();
-        let position_line = position + root_line_offset + 1;
-        let total_lines = state.visible_nodes(self.tree).len() + root_line_offset;
+        let visible_nodes = state.visible_nodes(self.tree).to_vec();
+        if visible_nodes.is_empty() {
+            return;
+        }
 
-        let viewport = Viewport::new(area, self.block.as_ref(), position_line, total_lines);
+        let root_line_offset = usize::from(self.root_label.is_some());
+        let selected_id = match state.selected {
+            Some(selected_id) => visible_nodes
+                .iter()
+                .position(|node| node.id == selected_id)
+                .unwrap_or_else(|| {
+                    state.selected = Some(visible_nodes[0].id);
+                    0
+                }),
+            None => {
+                state.selected = Some(visible_nodes[0].id);
+                0
+            }
+        };
+        let selected_line = selected_id + root_line_offset + 1;
+        let total_lines = visible_nodes.len() + root_line_offset;
+
+        let viewport = Viewport::new(area, self.block.as_ref(), selected_line, total_lines);
         state.update_viewport(viewport);
 
-        let mut lines: Vec<Line> = Vec::new();
-        let mut lineage = Vec::new();
-
-        if let Some(label) = self.root_label {
-            lines.push(Line::from(label.to_string()));
-        }
-
-        // NOTE: Instead of processing the entire tree, we could optimize by
-        // only rendering visible nodes.
-        Self::render_children(
-            &mut lines,
-            self.tree,
-            self.tree.roots(),
+        let lines = Self::render_lines(
+            &visible_nodes,
             state,
-            &mut lineage,
+            self.tree,
             &self.style,
-            self.root_label.is_some(),
+            self.root_label,
+            viewport,
+            root_line_offset,
         );
 
-        let mut visible_lines: Vec<Line> = lines
-            .into_iter()
-            .skip(viewport.offset)
-            .take(viewport.height)
-            .collect();
-
-        if viewport.offset > 0 {
-            let breadcrumb = Self::breadcrumb_line(self.tree, state, &self.style);
-            visible_lines.remove(0);
-            visible_lines.insert(0, breadcrumb);
-        }
-
-        let mut paragraph = Paragraph::new(visible_lines).style(self.style.style);
+        let mut paragraph = Paragraph::new(lines).style(self.style.style);
         if let Some(block) = self.block {
             paragraph = paragraph.block(block);
         }
@@ -188,90 +185,129 @@ impl StatefulWidget for TreeWidget<'_> {
 }
 
 impl<'a> TreeWidget<'a> {
-    /// Recursively renders dependencies.
-    fn render_children(
-        lines: &mut Vec<Line>,
-        tree: &DependencyTree,
-        nodes: &[NodeId],
+    fn render_lines(
+        visible_nodes: &[VisibleNode],
         state: &TreeWidgetState,
-        lineage: &mut Vec<bool>,
+        tree: &DependencyTree,
         style: &TreeWidgetStyle,
-        allow_root_connector: bool,
-    ) {
-        for (index, node_id) in nodes.iter().enumerate() {
-            let is_last = index + 1 == nodes.len();
-            Self::render_node(
-                lines,
-                tree,
-                *node_id,
-                state,
-                lineage,
-                style,
-                allow_root_connector,
-                is_last,
-            );
+        root_label: Option<&str>,
+        viewport: Viewport,
+        root_line_offset: usize,
+    ) -> Vec<Line<'a>> {
+        let mut lines = Vec::with_capacity(viewport.height);
+        if viewport.height == 0 {
+            return lines;
         }
+
+        let selected = state.selected;
+        let root_label_present = root_label.is_some();
+
+        if viewport.offset == 0 {
+            // Top of the tree: optional root label + first visible nodes.
+            if let Some(label) = root_label {
+                lines.push(Line::from(label.to_string()));
+            }
+
+            let available = viewport.height.saturating_sub(lines.len());
+            let max_nodes = available.min(visible_nodes.len());
+
+            for node in visible_nodes.iter().take(max_nodes) {
+                if let Some(line) =
+                    Self::render_visible_node(tree, node, selected, root_label_present, style)
+                {
+                    lines.push(line);
+                }
+            }
+        } else {
+            // Scrolled: show breadcrumb on top, then the slice of visible nodes.
+            lines.push(Self::breadcrumb_line(tree, state, style));
+
+            let total_lines = visible_nodes.len() + root_line_offset;
+
+            let start_flat = viewport.offset + 1;
+            let end_flat = (viewport.offset + viewport.height).min(total_lines);
+
+            for flat_id in start_flat..end_flat {
+                let node_id = flat_id.saturating_sub(root_line_offset);
+                if let Some(node) = visible_nodes.get(node_id)
+                    && let Some(line) =
+                        Self::render_visible_node(tree, node, selected, root_label_present, style)
+                {
+                    lines.push(line);
+                }
+            }
+        }
+
+        lines
     }
 
-    /// Renders a single dependency node.
-    #[allow(clippy::too_many_arguments)]
-    fn render_node(
-        lines: &mut Vec<Line>,
+    /// Renders a single visible dependency line.
+    fn render_visible_node(
         tree: &DependencyTree,
-        node_id: NodeId,
-        state: &TreeWidgetState,
-        lineage: &mut Vec<bool>,
+        node: &VisibleNode,
+        selected: Option<NodeId>,
+        root_label_present: bool,
         style: &TreeWidgetStyle,
-        allow_root_connector: bool,
-        is_last: bool,
-    ) {
-        let Some(node) = tree.node(node_id) else {
-            return;
+    ) -> Option<Line<'a>> {
+        let node_data = tree.node(node.id)?;
+        let (lineage, is_last) = Self::build_lineage(tree, node.id)?;
+
+        let is_root = node_data.parent.is_none();
+        let allow_root_connector = if lineage.len() <= 1 {
+            root_label_present
+        } else {
+            true
+        };
+        let show_connector = !is_root && (allow_root_connector || !lineage.is_empty());
+
+        let indent = Self::make_indent(&lineage, style);
+        let rendered = RenderedNode::build(
+            node_data,
+            selected == Some(node.id),
+            is_last,
+            &indent,
+            show_connector,
+            style,
+        );
+        Some(rendered.line)
+    }
+
+    /// Builds lineage information:
+    ///
+    /// - `Vec<bool>`: for each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
+    /// - `bool`: whether the current node is the last child of its parent.
+    fn build_lineage(tree: &DependencyTree, node_id: NodeId) -> Option<(Vec<bool>, bool)> {
+        let node = tree.node(node_id)?;
+
+        // Is this node the last among its siblings?
+        let is_last = match node.parent {
+            Some(parent_id) => {
+                let parent = tree.node(parent_id)?;
+                parent.children.last().copied() == Some(node_id)
+            }
+            None => true,
         };
 
-        let is_open = state.open.contains(&node_id);
-        let is_selected = state.selected == Some(node_id);
-        let is_root = node.parent.is_none();
+        // For each ancestor, we record whether it has further siblings after it.
+        let mut lineage = Vec::new();
+        let mut current = node.parent;
 
-        let show_connector = !is_root && (allow_root_connector || !lineage.is_empty());
-        let indent = Self::make_indent(lineage, style);
-        let rendered =
-            RenderedNode::build(node, is_selected, is_last, &indent, show_connector, style);
-        lines.push(rendered.line);
-
-        if is_open && !node.children.is_empty() {
-            if is_root {
-                lineage.push(false);
+        // Traverse up to the root to build the lineage.
+        while let Some(ancestor_id) = current {
+            let ancestor = tree.node(ancestor_id)?;
+            let has_more_siblings = if let Some(grand_id) = ancestor.parent {
+                let grand = tree.node(grand_id)?;
+                grand.children.last().copied() != Some(ancestor_id)
             } else {
-                lineage.push(!is_last);
-            }
-            Self::render_children(lines, tree, &node.children, state, lineage, style, true);
-            lineage.pop();
-        }
-    }
+                false
+            };
 
-    /// Renders the scrollbar if applicable.
-    fn render_scrollbar(
-        scrollbar: Scrollbar<'a>,
-        viewport: &Viewport,
-        total_lines: usize,
-        buf: &mut Buffer,
-    ) {
-        if viewport.height == 0 || viewport.max_offset == 0 {
-            return;
+            lineage.push(has_more_siblings);
+            current = ancestor.parent;
         }
 
-        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(viewport.height))
-            .position(viewport.offset)
-            .viewport_content_length(viewport.height);
-        scrollbar.render(
-            viewport.inner.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            buf,
-            &mut scrollbar_state,
-        );
+        lineage.reverse();
+        Some((lineage, is_last))
     }
 
     /// Generates indentation based on lineage.
@@ -288,6 +324,31 @@ impl<'a> TreeWidget<'a> {
             .collect()
     }
 
+    /// Renders the scrollbar if applicable.
+    fn render_scrollbar(
+        scrollbar: Scrollbar<'a>,
+        viewport: &Viewport,
+        total_lines: usize,
+        buf: &mut Buffer,
+    ) {
+        if viewport.height == 0 || viewport.max_offset == 0 {
+            return;
+        }
+
+        let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(viewport.height))
+            .position(viewport.offset)
+            .viewport_content_length(viewport.height);
+
+        scrollbar.render(
+            viewport.inner.inner(Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            buf,
+            &mut scrollbar_state,
+        );
+    }
+
     /// Generates a breadcrumb line for the selected node.
     fn breadcrumb_line(
         tree: &DependencyTree,
@@ -296,6 +357,8 @@ impl<'a> TreeWidget<'a> {
     ) -> Line<'a> {
         let mut names = Vec::new();
         let mut current = state.selected;
+
+        // Populate the names from the selected node up to the root.
         while let Some(id) = current {
             if let Some(node) = tree.node(id) {
                 names.push(node.name.clone());
@@ -304,8 +367,9 @@ impl<'a> TreeWidget<'a> {
                 break;
             }
         }
-
         names.reverse();
+
+        // Create spans for the breadcrumb line.
         let mut spans = Vec::new();
         for (i, name) in names.iter().enumerate() {
             let is_last = i + 1 == names.len();
@@ -314,7 +378,9 @@ impl<'a> TreeWidget<'a> {
             } else {
                 style.style
             };
+
             spans.push(Span::styled(name.clone(), name_style));
+
             if !is_last {
                 spans.push(Span::styled(" → ", style.style));
             }
@@ -374,24 +440,29 @@ impl<'a> RenderedNode<'a> {
     /// Formats suffixes for a dependency node.
     fn format_suffixes(node: &Dependency, style: &TreeWidgetStyle) -> Option<Vec<Span<'a>>> {
         let mut suffixes = Vec::new();
+
         if let Some(path) = &node.manifest_dir {
             suffixes.push(path.clone());
         }
+
         if node.is_proc_macro {
             suffixes.push("proc-macro".to_string());
         }
+
         if suffixes.is_empty() {
             return None;
         }
 
         let mut spans = Vec::new();
         spans.push(Span::styled(" (", style.style));
+
         for (idx, suffix) in suffixes.iter().enumerate() {
             if idx > 0 {
                 spans.push(Span::styled(", ", style.style));
             }
             spans.push(Span::styled(suffix.clone(), style.suffix_style));
         }
+
         spans.push(Span::styled(")", style.style));
 
         Some(spans)
