@@ -572,15 +572,15 @@ impl<'a> RenderedNode<'a> {
 
 fn ancestor_style(style: &TreeWidgetStyle, depth: usize) -> Style {
     let colors = [
-        Color::LightCyan,
-        Color::LightGreen,
-        Color::LightBlue,
-        Color::LightMagenta,
-        Color::Yellow,
-        Color::Green,
-        Color::Cyan,
-        Color::Blue,
-        Color::Magenta,
+        Color::Rgb(0x8c, 0xed, 0xf7),
+        Color::Rgb(0x5c, 0xd1, 0xc9),
+        Color::Rgb(0x3f, 0xb9, 0xb0),
+        Color::Rgb(0x28, 0x9f, 0x9a),
+        Color::Rgb(0x23, 0x8c, 0x8a),
+        Color::Rgb(0x1d, 0x6f, 0x72),
+        Color::Rgb(0x1b, 0x5b, 0x63),
+        Color::Rgb(0x19, 0x4a, 0x55),
+        Color::Rgb(0x15, 0x37, 0x42),
     ];
     let idx = depth % colors.len();
     style.style.fg(colors[idx])
