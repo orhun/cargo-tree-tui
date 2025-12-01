@@ -79,8 +79,8 @@ pub(crate) struct Viewport {
 /// Lineage information for a dependency node.
 #[derive(Debug)]
 struct Lineage {
-    /// For each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
-    segments: Vec<bool>,
+    /// For each ancestor from root → parent, capture connector data and which node owns it.
+    segments: Vec<LineageSegment>,
     /// Whether the current node is the last child of its parent.
     is_last: bool,
     /// Whether this node is the currently selected one.
@@ -95,6 +95,18 @@ impl Lineage {
     fn has_segments(&self) -> bool {
         !self.segments.is_empty()
     }
+}
+
+/// Additional data carried per ancestor column so connectors can be related to their parents.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+struct LineageSegment {
+    /// Ancestor node this column belongs to.
+    node: NodeId,
+    /// Whether this ancestor has siblings after it.
+    has_more: bool,
+    /// Column offset in characters for this connector.
+    column: usize,
 }
 
 impl Viewport {
@@ -289,7 +301,8 @@ impl<'a> TreeWidget<'a> {
         style: &TreeWidgetStyle,
     ) -> Option<Line<'a>> {
         let node_data = tree.node(node.id)?;
-        let lineage = Self::build_lineage(tree, node.id, selected)?;
+        let indent_unit = Self::indent_unit(style);
+        let lineage = Self::build_lineage(tree, node.id, selected, indent_unit)?;
         let has_children = !node_data.children.is_empty();
         let is_open = state.open.contains(&node.id);
 
@@ -319,6 +332,7 @@ impl<'a> TreeWidget<'a> {
         tree: &DependencyTree,
         node_id: NodeId,
         selected: Option<NodeId>,
+        indent_unit: usize,
     ) -> Option<Lineage> {
         let node = tree.node(node_id)?;
 
@@ -334,6 +348,7 @@ impl<'a> TreeWidget<'a> {
         // For each ancestor, we record whether it has further siblings after it.
         let mut lineage = Vec::new();
         let mut current = node.parent;
+        let mut depth = 0;
 
         // Traverse up to the root to build the lineage.
         while let Some(ancestor_id) = current {
@@ -345,8 +360,13 @@ impl<'a> TreeWidget<'a> {
                 false
             };
 
-            lineage.push(has_more_siblings);
+            lineage.push(LineageSegment {
+                node: ancestor_id,
+                has_more: has_more_siblings,
+                column: depth * indent_unit,
+            });
             current = ancestor.parent;
+            depth += 1;
         }
 
         lineage.reverse();
@@ -357,19 +377,9 @@ impl<'a> TreeWidget<'a> {
         })
     }
 
-    /// Generates indentation based on lineage.
-    fn make_indent(lineage: &Lineage, style: &TreeWidgetStyle) -> String {
-        lineage
-            .segments
-            .iter()
-            .map(|&has_more| {
-                if has_more {
-                    style.continuation_symbol
-                } else {
-                    style.empty_symbol
-                }
-            })
-            .collect()
+    /// Determines the indentation unit based on the style.
+    fn indent_unit(style: &TreeWidgetStyle) -> usize {
+        style.continuation_symbol.chars().count().max(1)
     }
 
     /// Renders the scrollbar if applicable.
