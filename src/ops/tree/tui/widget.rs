@@ -35,7 +35,7 @@ impl Default for TreeWidgetStyle {
         Self {
             highlight_style: Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow),
+                .fg(Color::White),
             style: Style::default(),
             name_style: Style::default(),
             version_style: Style::default().fg(Color::Green),
@@ -314,11 +314,9 @@ impl<'a> TreeWidget<'a> {
         };
         let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
-        let indent = Self::make_indent(&lineage, style);
         let rendered = RenderedNode::build(
             node_data,
             &lineage,
-            &indent,
             show_connector,
             has_children,
             is_open,
@@ -458,7 +456,6 @@ impl<'a> RenderedNode<'a> {
     fn build(
         node: &Dependency,
         lineage: &Lineage,
-        indent: &str,
         show_connector: bool,
         has_children: bool,
         is_open: bool,
@@ -466,30 +463,15 @@ impl<'a> RenderedNode<'a> {
     ) -> Self {
         let mut spans = Vec::new();
 
-        let toggle = if has_children {
-            if is_open {
-                format!("{} ", style.node_open_symbol)
-            } else {
-                format!("{} ", style.node_closed_symbol)
-            }
-        } else {
-            format!("{} ", style.node_symbol)
-        };
-
         if show_connector {
-            let connector = if lineage.is_last {
-                style.last_branch_symbol
-            } else {
-                style.branch_symbol
-            };
-            spans.push(Span::styled(
-                format!("{indent}{connector}{toggle}"),
-                style.style,
-            ));
+            spans.extend(Self::prefix_spans(lineage, has_children, is_open, style));
         }
 
         let name_style = if lineage.is_selected {
             style.highlight_style
+        } else if !lineage.segments.is_empty() {
+            let parent_depth = lineage.segments.len() - 1;
+            ancestor_style(style, parent_depth)
         } else {
             style.name_style
         };
@@ -507,6 +489,53 @@ impl<'a> RenderedNode<'a> {
         Self {
             line: Line::from(spans),
         }
+    }
+
+    fn prefix_spans(
+        lineage: &Lineage,
+        has_children: bool,
+        is_open: bool,
+        style: &TreeWidgetStyle,
+    ) -> Vec<Span<'a>> {
+        let mut spans = Vec::new();
+        if lineage.segments.is_empty() {
+            return spans;
+        }
+
+        for (depth, segment) in lineage.segments.iter().enumerate() {
+            let symbol = if segment.has_more {
+                style.continuation_symbol
+            } else {
+                style.empty_symbol
+            };
+            spans.push(Span::styled(
+                symbol.to_string(),
+                ancestor_style(style, depth),
+            ));
+        }
+
+        let connector = if lineage.is_last {
+            style.last_branch_symbol
+        } else {
+            style.branch_symbol
+        };
+
+        let parent_depth = lineage.segments.len().saturating_sub(1);
+        let parent_style = ancestor_style(style, parent_depth);
+        spans.push(Span::styled(connector.to_string(), parent_style));
+
+        let toggle = if has_children {
+            if is_open {
+                format!("{} ", style.node_open_symbol)
+            } else {
+                format!("{} ", style.node_closed_symbol)
+            }
+        } else {
+            format!("{} ", style.node_symbol)
+        };
+        spans.push(Span::styled(toggle, parent_style));
+
+        spans
     }
 
     /// Formats suffixes for a dependency node.
@@ -539,4 +568,20 @@ impl<'a> RenderedNode<'a> {
 
         Some(spans)
     }
+}
+
+fn ancestor_style(style: &TreeWidgetStyle, depth: usize) -> Style {
+    let colors = [
+        Color::LightCyan,
+        Color::LightGreen,
+        Color::LightBlue,
+        Color::LightMagenta,
+        Color::Yellow,
+        Color::Green,
+        Color::Cyan,
+        Color::Blue,
+        Color::Magenta,
+    ];
+    let idx = depth % colors.len();
+    style.style.fg(colors[idx])
 }
