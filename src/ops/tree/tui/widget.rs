@@ -18,6 +18,7 @@ pub struct TreeWidgetStyle {
     name_style: Style,
     version_style: Style,
     suffix_style: Style,
+    node_symbol: char,
     node_closed_symbol: char,
     node_open_symbol: char,
     branch_symbol: &'static str,
@@ -39,12 +40,13 @@ impl Default for TreeWidgetStyle {
             name_style: Style::default(),
             version_style: Style::default().fg(Color::Green),
             suffix_style: Style::default().fg(Color::Cyan),
+            node_symbol: '•',
             node_closed_symbol: '▸',
             node_open_symbol: '▾',
-            branch_symbol: "├── ",
-            last_branch_symbol: "└── ",
-            continuation_symbol: "│   ",
-            empty_symbol: "    ",
+            branch_symbol: "├──",
+            last_branch_symbol: "└──",
+            continuation_symbol: "│  ",
+            empty_symbol: "   ",
         }
     }
 }
@@ -461,7 +463,7 @@ impl<'a> RenderedNode<'a> {
                 format!("{} ", style.node_closed_symbol)
             }
         } else {
-            "".to_string()
+            format!("{} ", style.node_symbol)
         };
 
         if show_connector {
