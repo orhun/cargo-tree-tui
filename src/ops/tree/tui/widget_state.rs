@@ -20,6 +20,10 @@ pub struct TreeWidgetState {
     visible_cache: Vec<VisibleNode>,
     /// Indicates whether the visible cache is outdated.
     dirty: bool,
+    /// Current search query (lowercased) used for highlighting.
+    pub search_query: Option<String>,
+    /// Nodes that match the active search.
+    search_matches: Vec<NodeId>,
 }
 
 /// Visible node metadata used for navigation.
@@ -39,6 +43,8 @@ impl Default for TreeWidgetState {
             viewport: Viewport::default(),
             visible_cache: Vec::new(),
             dirty: true,
+            search_query: None,
+            search_matches: Vec::new(),
         }
     }
 }
@@ -374,6 +380,11 @@ impl TreeWidgetState {
         self.viewport = viewport;
     }
 
+    /// Returns whether the node matches the active search.
+    pub fn is_search_match(&self, id: NodeId) -> bool {
+        self.search_query.is_some() && self.search_matches.contains(&id)
+    }
+
     /// Expands all nodes in the tree.
     pub fn expand_all(&mut self, tree: &DependencyTree) {
         self.open.clear();
@@ -388,5 +399,61 @@ impl TreeWidgetState {
         }
         self.dirty = true;
         self.ensure_selection(tree);
+    }
+
+    /// Updates search state and moves selection to the next visible match when available.
+    pub fn search(&mut self, tree: &DependencyTree, query: &str) {
+        let query = query.trim();
+        if query.is_empty() {
+            self.search_query = None;
+            self.search_matches.clear();
+            return;
+        }
+
+        let needle = query.to_ascii_lowercase();
+        self.search_query = Some(needle.clone());
+        self.search_matches.clear();
+
+        for (idx, node) in tree.nodes.iter().enumerate() {
+            if node.name.to_ascii_lowercase().contains(&needle) {
+                self.search_matches.push(NodeId(idx));
+            }
+        }
+
+        if self.search_matches.is_empty() || !self.ensure_selection(tree) {
+            return;
+        }
+
+        let visible = self.visible_nodes(tree).to_vec();
+        let matches = self.search_matches.clone();
+        let Some(current_index) = self
+            .selected
+            .and_then(|id| Self::selected_index(&visible, id))
+        else {
+            return;
+        };
+
+        // Prefer the first match at or after the current selection, otherwise wrap.
+        let mut next_match = None;
+        for (idx, visible_node) in visible.iter().enumerate().skip(current_index) {
+            if matches.contains(&visible_node.id) {
+                next_match = Some(idx);
+                break;
+            }
+        }
+
+        if next_match.is_none() {
+            next_match = visible
+                .iter()
+                .enumerate()
+                .find(|(_, node)| matches.contains(&node.id))
+                .map(|(idx, _)| idx);
+        }
+
+        if let Some(idx) = next_match {
+            if let Some(target) = visible.get(idx) {
+                self.selected = Some(target.id);
+            }
+        }
     }
 }

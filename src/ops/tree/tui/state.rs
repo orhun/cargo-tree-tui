@@ -32,6 +32,7 @@ impl TuiState {
             match key_event.code {
                 KeyCode::Esc => {
                     self.search_query = None;
+                    self.update_search();
                 }
                 KeyCode::Backspace => {
                     if let Some(query) = &mut self.search_query {
@@ -39,6 +40,7 @@ impl TuiState {
                             self.update_search();
                         } else {
                             self.search_query = None;
+                            self.update_search();
                         }
                     }
                 }
@@ -62,6 +64,7 @@ impl TuiState {
             }
             (KeyCode::Char('/'), _) => {
                 self.search_query = Some(String::new());
+                self.update_search();
             }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
@@ -98,8 +101,7 @@ impl TuiState {
     }
 
     fn update_search(&mut self) {
-        if let Some(query) = &self.search_query {
-            self.tree_widget_state.search(&self.dependency_tree, query);
-        }
+        let query = self.search_query.as_deref().unwrap_or_default();
+        self.tree_widget_state.search(&self.dependency_tree, query);
     }
 }

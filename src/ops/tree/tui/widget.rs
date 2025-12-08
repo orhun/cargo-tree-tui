@@ -18,6 +18,7 @@ pub struct TreeWidgetStyle {
     name_style: Style,
     version_style: Style,
     suffix_style: Style,
+    search_highlight_style: Style,
     node_symbol: char,
     node_closed_symbol: char,
     node_open_symbol: char,
@@ -40,6 +41,7 @@ impl Default for TreeWidgetStyle {
             name_style: Style::default(),
             version_style: Style::default().fg(Color::Green),
             suffix_style: Style::default().fg(Color::Cyan),
+            search_highlight_style: Style::default().bg(Color::DarkGray).fg(Color::Yellow),
             node_symbol: '•',
             node_closed_symbol: '▸',
             node_open_symbol: '▾',
@@ -292,6 +294,11 @@ impl<'a> TreeWidget<'a> {
         let lineage = Self::build_lineage(tree, node.id, selected)?;
         let has_children = !node_data.children.is_empty();
         let is_open = state.open.contains(&node.id);
+        let search_term = if state.is_search_match(node.id) {
+            state.search_query.as_deref()
+        } else {
+            None
+        };
 
         let is_root = node_data.parent.is_none();
         let allow_root_connector = if lineage.depth() <= 1 {
@@ -309,6 +316,7 @@ impl<'a> TreeWidget<'a> {
             show_connector,
             has_children,
             is_open,
+            search_term,
             style,
         );
         Some(rendered.line)
@@ -452,6 +460,7 @@ impl<'a> RenderedNode<'a> {
         show_connector: bool,
         has_children: bool,
         is_open: bool,
+        search_term: Option<&str>,
         style: &TreeWidgetStyle,
     ) -> Self {
         let mut spans = Vec::new();
@@ -484,7 +493,12 @@ impl<'a> RenderedNode<'a> {
             style.name_style
         };
 
-        spans.push(Span::styled(node.name.clone(), name_style));
+        spans.extend(Self::render_name(
+            &node.name,
+            name_style,
+            search_term,
+            style,
+        ));
         spans.push(Span::styled(
             format!(" v{}", node.version),
             style.version_style,
@@ -497,6 +511,48 @@ impl<'a> RenderedNode<'a> {
         Self {
             line: Line::from(spans),
         }
+    }
+
+    fn render_name(
+        name: &str,
+        base_style: Style,
+        search_term: Option<&str>,
+        style: &TreeWidgetStyle,
+    ) -> Vec<Span<'static>> {
+        let Some(term) = search_term else {
+            return vec![Span::styled(name.to_string(), base_style)];
+        };
+
+        let term = term.trim();
+        if term.is_empty() {
+            return vec![Span::styled(name.to_string(), base_style)];
+        }
+
+        let mut spans = Vec::new();
+        let lower_name = name.to_ascii_lowercase();
+        let mut start = 0;
+        let term_len = term.len();
+        let highlight_style = base_style.patch(style.search_highlight_style);
+
+        while let Some(pos) = lower_name[start..].find(term) {
+            let abs = start + pos;
+            if abs > start {
+                spans.push(Span::styled(name[start..abs].to_string(), base_style));
+            }
+            let end = abs + term_len;
+            spans.push(Span::styled(name[abs..end].to_string(), highlight_style));
+            start = end;
+        }
+
+        if start < name.len() {
+            spans.push(Span::styled(name[start..].to_string(), base_style));
+        }
+
+        if spans.is_empty() {
+            spans.push(Span::styled(name.to_string(), base_style));
+        }
+
+        spans
     }
 
     /// Formats suffixes for a dependency node.
