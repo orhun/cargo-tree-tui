@@ -387,14 +387,7 @@ impl<'a> TreeWidget<'a> {
             .position(viewport.offset)
             .viewport_content_length(viewport.height);
 
-        scrollbar.render(
-            viewport.inner.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            buf,
-            &mut scrollbar_state,
-        );
+        scrollbar.render(viewport.inner, buf, &mut scrollbar_state);
     }
 
     /// Generates a breadcrumb line for the selected node.

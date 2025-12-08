@@ -27,7 +27,7 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
     let tree_widget = TreeWidget::new(&state.dependency_tree).scrollbar(
-        Scrollbar::new(ScrollbarOrientation::VerticalLeft)
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
             .track_symbol(Some("┆"))
             .thumb_symbol("▐")
             .begin_symbol(Some("▴"))
