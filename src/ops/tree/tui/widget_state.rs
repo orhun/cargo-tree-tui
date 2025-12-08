@@ -136,14 +136,18 @@ impl TreeWidgetState {
             None => return,
         };
 
-        if self.open.remove(&selected) {
+        let Some(node) = tree.node(selected) else {
+            return;
+        };
+
+        // If the node has children and is open, close it first.
+        if !node.children.is_empty() && self.open.remove(&selected) {
             self.dirty = true;
             return;
         }
 
-        if let Some(node) = tree.node(selected)
-            && let Some(parent) = node.parent
-        {
+        // Otherwise move focus to its parent when possible.
+        if let Some(parent) = node.parent {
             self.selected = Some(parent);
         }
     }
@@ -278,8 +282,13 @@ impl TreeWidgetState {
             return;
         }
 
-        self.open.insert(id);
         if let Some(node) = tree.node(id) {
+            // Do not mark leaves as open to avoid confusing collapse semantics.
+            if node.children.is_empty() {
+                return;
+            }
+
+            self.open.insert(id);
             for &child in &node.children {
                 self.open_node(tree, child, depth + 1, max_depth);
             }
@@ -369,7 +378,13 @@ impl TreeWidgetState {
     pub fn expand_all(&mut self, tree: &DependencyTree) {
         self.open.clear();
         for i in 0..tree.nodes.len() {
-            self.open.insert(NodeId(i));
+            let id = NodeId(i);
+            if let Some(node) = tree.node(id) {
+                // Only mark non-leaf nodes as open, leaves stay implicit.
+                if !node.children.is_empty() {
+                    self.open.insert(id);
+                }
+            }
         }
         self.dirty = true;
         self.ensure_selection(tree);
