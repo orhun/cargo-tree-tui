@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::core::DependencyTree;
 
@@ -12,6 +12,7 @@ pub struct TuiState {
     pub running: bool,
     pub dependency_tree: DependencyTree,
     pub tree_widget_state: TreeWidgetState,
+    pub show_help: bool,
 }
 
 impl TuiState {
@@ -23,6 +24,7 @@ impl TuiState {
             running: true,
             dependency_tree,
             tree_widget_state,
+            show_help: false,
         })
     }
 
@@ -31,14 +33,17 @@ impl TuiState {
             (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
+            (KeyCode::Char('?'), _) => {
+                self.show_help = !self.show_help;
+            }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
             }
-            (KeyCode::Down, mods) if mods.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char(']'), _) => {
                 self.tree_widget_state
                     .select_next_sibling(&self.dependency_tree);
             }
-            (KeyCode::Up, mods) if mods.contains(KeyModifiers::CONTROL) => {
+            (KeyCode::Char('['), _) => {
                 self.tree_widget_state
                     .select_previous_sibling(&self.dependency_tree);
             }
