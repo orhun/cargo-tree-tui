@@ -6,7 +6,7 @@ pub mod widget_state;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation},
 };
@@ -39,16 +39,14 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
 pub fn draw_help_text(frame: &mut Frame, area: Rect) {
     let key_style = Style::default()
         .fg(Color::Magenta)
-        .add_modifier(Modifier::BOLD);
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::REVERSED);
 
     let text = Line::from(vec![
-        Span::raw("Hit "),
-        Span::styled("?", key_style),
-        Span::raw(" or "),
-        Span::styled("space", key_style),
-        Span::raw(" for commands, "),
-        Span::styled("q", key_style),
-        Span::raw(" to quit"),
+        " q ".bold(),
+        Span::styled(" QUIT ", key_style),
+        " ? ".bold(),
+        Span::styled(" HELP ", key_style),
     ]);
 
     let paragraph = Paragraph::new(text).style(Style::default().bg(Color::Black).fg(Color::White));

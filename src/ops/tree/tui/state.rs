@@ -36,9 +36,6 @@ impl TuiState {
             (KeyCode::Char('?'), _) => {
                 self.show_help = !self.show_help;
             }
-            (KeyCode::Char(' '), _) => {
-                self.show_help = !self.show_help;
-            }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
             }
