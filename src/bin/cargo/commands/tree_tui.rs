@@ -1,13 +1,17 @@
 use anyhow::Result;
 use crossterm::event::{self, Event};
 
-use cargo_tree_tui::ops::tree::tui::{draw_tui, state::TuiState};
+use cargo_tree_tui::{
+    core::DependencyTree,
+    ops::tree::tui::{draw_tui, state::TuiState},
+};
 
 use crate::cli::TreeArgs;
 
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
-    let mut state = TuiState::new(args.manifest_path)?;
+    let dependency_tree = DependencyTree::load(args.manifest_path)?;
+    let mut state = TuiState::new(dependency_tree)?;
     let mut terminal = ratatui::init();
 
     while state.running {
