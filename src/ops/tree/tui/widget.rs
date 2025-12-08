@@ -1,6 +1,6 @@
 use ratatui::{
     buffer::Buffer,
-    layout::{Margin, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget},
