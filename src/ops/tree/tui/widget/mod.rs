@@ -4,14 +4,11 @@ use ratatui::{
     widgets::{Block, Paragraph, Scrollbar, StatefulWidget, Widget},
 };
 
-use crate::core::DependencyTree;
+use crate::{core::DependencyTree, ops::tree::tui::widget::render::RenderOutput};
 
-use self::{
-    render::{render_lines, render_scrollbar},
-    viewport::Viewport,
-};
+use self::render::{RenderContext, render_scrollbar};
 
-pub use self::{render::RenderedNode, state::TreeWidgetState, style::TreeWidgetStyle};
+pub use self::{state::TreeWidgetState, style::TreeWidgetStyle};
 
 mod lineage;
 mod render;
@@ -60,44 +57,22 @@ impl StatefulWidget for TreeWidget<'_> {
     type State = TreeWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let visible_nodes = state.visible_nodes(self.tree).to_vec();
-        if visible_nodes.is_empty() {
+        if state.visible_nodes(self.tree).is_empty() {
             return;
         }
 
-        let root_line_offset = usize::from(self.root_label.is_some());
-        let selected_id = match state.selected {
-            Some(selected_id) => visible_nodes
-                .iter()
-                .position(|node| node.id == selected_id)
-                .unwrap_or_else(|| {
-                    state.selected = Some(visible_nodes[0].id);
-                    0
-                }),
-            None => {
-                state.selected = Some(visible_nodes[0].id);
-                0
-            }
-        };
-        let selected_line = selected_id + root_line_offset + 1;
-        let total_lines = visible_nodes.len() + root_line_offset;
+        let block_ref = self.block.as_ref();
+        let mut ctx = RenderContext::new(self.tree, state, &self.style, self.root_label, block_ref);
 
-        let viewport = Viewport::new(area, self.block.as_ref(), selected_line, total_lines);
-        state.update_viewport(viewport);
-
-        let lines = render_lines(
-            &visible_nodes,
-            state,
-            self.tree,
-            &self.style,
-            self.root_label,
+        let RenderOutput {
+            lines,
+            total_lines,
             viewport,
-            root_line_offset,
-        );
+        } = ctx.render(area);
 
         let mut paragraph = Paragraph::new(lines).style(self.style.style);
-        if let Some(block) = self.block {
-            paragraph = paragraph.block(block);
+        if let Some(block) = block_ref {
+            paragraph = paragraph.block(block.clone());
         }
 
         paragraph.render(viewport.area, buf);
