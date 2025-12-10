@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::core::DependencyTree;
 
-use super::widget_state::TreeWidgetState;
+use super::widget::TreeWidgetState;
 
 #[derive(Debug)]
 pub struct TuiState {

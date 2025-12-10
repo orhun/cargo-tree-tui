@@ -1,7 +1,6 @@
 pub mod help;
 pub mod state;
 pub mod widget;
-pub mod widget_state;
 
 use ratatui::{
     Frame,
