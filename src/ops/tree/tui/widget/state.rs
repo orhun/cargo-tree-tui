@@ -1,13 +1,12 @@
 use std::collections::HashSet;
 
-use crate::{
-    core::{DependencyTree, NodeId},
-    ops::tree::tui::widget::Viewport,
-};
+use crate::core::{DependencyTree, NodeId};
+
+use super::viewport::Viewport;
 
 /// [`TreeWidget`] state that tracks open nodes and the current selection.
 ///
-/// [`TreeWidget`]: crate::util::tui::tree_widget::TreeWidget
+/// [`TreeWidget`]: super::TreeWidget
 #[derive(Debug)]
 pub struct TreeWidgetState {
     /// Set of expanded nodes.
@@ -303,44 +302,45 @@ impl TreeWidgetState {
 
     /// Removes all descendants of `id` from the visible cache in-place.
     fn prune_descendants(&mut self, id: NodeId) {
-        // Find the start index of the node
-        let start = match self.visible_cache.iter().position(|n| n.id == id) {
-            Some(idx) => idx,
-            None => return,
+        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
+            return;
+        };
+        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
+            return;
         };
 
-        let depth = self.visible_cache[start].depth;
-        let mut end = start + 1;
-
-        // Find the range of descendants to remove
-        while end < self.visible_cache.len() && self.visible_cache[end].depth > depth {
-            end += 1;
+        let first_descendant = start + 1;
+        if first_descendant >= self.visible_cache.len() {
+            return;
         }
 
-        if end > start + 1 {
-            self.visible_cache.drain(start + 1..end);
-        }
+        let end = self.visible_cache[first_descendant..]
+            .iter()
+            .position(|node| node.depth <= depth)
+            .map(|offset| first_descendant + offset)
+            .unwrap_or(self.visible_cache.len());
+
+        self.visible_cache.drain(first_descendant..end);
     }
 
     /// Inserts the visible descendants of `id` into the cache in-place.
     fn insert_descendants(&mut self, id: NodeId, tree: &DependencyTree) {
-        let start = match self.visible_cache.iter().position(|n| n.id == id) {
-            Some(idx) => idx,
-            None => return,
+        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
+            return;
+        };
+        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
+            return;
         };
 
-        let depth = self.visible_cache[start].depth;
-
-        // Generate subtree in local buffer
         let mut subtree = Vec::new();
         Self::collect_visible(&self.open, tree, id, depth, &mut subtree);
-
-        // First element = the node itself, skip it
-        if subtree.len() > 1 {
-            let insert_at = start + 1;
-            self.visible_cache
-                .splice(insert_at..insert_at, subtree.into_iter().skip(1));
+        if subtree.len() <= 1 {
+            return;
         }
+
+        let insert_at = start + 1;
+        self.visible_cache
+            .splice(insert_at..insert_at, subtree.into_iter().skip(1));
     }
 
     /// Returns cached visible nodes along with their depth in the hierarchy.
