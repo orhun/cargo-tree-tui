@@ -118,7 +118,8 @@ impl TreeWidgetState {
         }
 
         if self.open.insert(selected) {
-            self.dirty = true;
+            self.insert_descendants(selected, tree);
+            self.dirty = false;
             return;
         }
 
@@ -142,7 +143,8 @@ impl TreeWidgetState {
 
         // If the node has children and is open, close it first.
         if !node.children.is_empty() && self.open.remove(&selected) {
-            self.dirty = true;
+            self.prune_descendants(selected);
+            self.dirty = false;
             return;
         }
 
@@ -296,6 +298,48 @@ impl TreeWidgetState {
             for &child in &node.children {
                 self.open_node(tree, child, depth + 1, max_depth);
             }
+        }
+    }
+
+    /// Removes all descendants of `id` from the visible cache in-place.
+    fn prune_descendants(&mut self, id: NodeId) {
+        // Find the start index of the node
+        let start = match self.visible_cache.iter().position(|n| n.id == id) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let depth = self.visible_cache[start].depth;
+        let mut end = start + 1;
+
+        // Find the range of descendants to remove
+        while end < self.visible_cache.len() && self.visible_cache[end].depth > depth {
+            end += 1;
+        }
+
+        if end > start + 1 {
+            self.visible_cache.drain(start + 1..end);
+        }
+    }
+
+    /// Inserts the visible descendants of `id` into the cache in-place.
+    fn insert_descendants(&mut self, id: NodeId, tree: &DependencyTree) {
+        let start = match self.visible_cache.iter().position(|n| n.id == id) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let depth = self.visible_cache[start].depth;
+
+        // Generate subtree in local buffer
+        let mut subtree = Vec::new();
+        Self::collect_visible(&self.open, tree, id, depth, &mut subtree);
+
+        // First element = the node itself, skip it
+        if subtree.len() > 1 {
+            let insert_at = start + 1;
+            self.visible_cache
+                .splice(insert_at..insert_at, subtree.into_iter().skip(1));
         }
     }
 
