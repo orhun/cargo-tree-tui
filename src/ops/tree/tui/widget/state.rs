@@ -13,6 +13,18 @@ pub struct TreeWidgetState {
     pub open: HashSet<NodeId>,
     /// Currently selected node.
     pub selected: Option<NodeId>,
+    /// Previous selection before starting a search (used to restore on cancel).
+    pub prev_selected: Option<NodeId>,
+    /// Whether a live search is in progress.
+    pub search_active: bool,
+    /// Current search query when active or persisted.
+    pub search_query: String,
+    /// Matched nodes for the current search (in document order).
+    pub search_matches: Vec<NodeId>,
+    /// Index into `search_matches` for the current highlighted match.
+    pub search_selected: Option<usize>,
+    /// If true, keep highlights after committing the search.
+    pub search_persist: bool,
     /// Current viewport.
     viewport: Viewport,
     /// Cached visible nodes.
@@ -35,6 +47,12 @@ impl Default for TreeWidgetState {
         Self {
             open: HashSet::new(),
             selected: None,
+            prev_selected: None,
+            search_active: false,
+            search_query: String::new(),
+            search_matches: Vec::new(),
+            search_selected: None,
+            search_persist: false,
             viewport: Viewport::default(),
             visible_cache: Vec::new(),
             dirty: true,
@@ -354,9 +372,67 @@ impl TreeWidgetState {
 
     fn rebuild_visible(&mut self, tree: &DependencyTree) {
         self.visible_cache.clear();
-        let open = &self.open;
-        for &root in tree.roots() {
-            Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+
+        // If there is an active search or a persisted highlight, build a set of
+        // nodes that should be shown: all ancestors of matched nodes plus the
+        // matched nodes themselves. This displays a pruned tree where matches
+        // appear as leaves and the path to them is visible.
+        if (!self.search_query.is_empty() && (self.search_active || self.search_persist)) && !self.search_matches.is_empty() {
+            let mut show_set: HashSet<NodeId> = HashSet::new();
+            for &m in &self.search_matches {
+                let mut cur = Some(m);
+                while let Some(id) = cur {
+                    if show_set.insert(id) {
+                        // continue walking up
+                        cur = tree.node(id).and_then(|n| n.parent);
+                    } else {
+                        break;
+                    }
+                }
+            }
+
+            // Ensure paths are expanded for visibility
+            for &id in show_set.iter() {
+                if let Some(n) = tree.node(id) {
+                    if !n.children.is_empty() {
+                        self.open.insert(id);
+                    }
+                }
+            }
+
+            for &root in tree.roots() {
+                Self::collect_visible_filtered(&self.open, tree, root, 0, &mut self.visible_cache, &show_set);
+            }
+        } else {
+            let open = &self.open;
+            for &root in tree.roots() {
+                Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+            }
+        }
+    }
+
+    fn collect_visible_filtered(
+        open: &HashSet<NodeId>,
+        tree: &DependencyTree,
+        id: NodeId,
+        depth: usize,
+        out: &mut Vec<VisibleNode>,
+        show_set: &HashSet<NodeId>,
+    ) {
+        if !show_set.contains(&id) {
+            return;
+        }
+
+        out.push(VisibleNode { id, depth });
+
+        if !open.contains(&id) {
+            return;
+        }
+
+        if let Some(node) = tree.node(id) {
+            for &child in &node.children {
+                Self::collect_visible_filtered(open, tree, child, depth + 1, out, show_set);
+            }
         }
     }
 
@@ -401,6 +477,83 @@ impl TreeWidgetState {
         true
     }
 
+    /// Set the active search query and recompute matches (live update).
+    pub fn set_search_query(&mut self, tree: &DependencyTree, query: String) {
+        if !self.search_active {
+            self.prev_selected = self.selected;
+        }
+        self.search_active = true;
+        self.search_query = query.clone();
+        self.search_matches.clear();
+        self.search_selected = None;
+
+        if query.is_empty() {
+            self.dirty = true;
+            return;
+        }
+
+        // Collect matches in document order (nodes vector order approximates this)
+        for i in 0..tree.nodes.len() {
+            let id = NodeId(i);
+            if let Some(node) = tree.node(id) {
+                if matches_query(&node.name, &query) || matches_query(&format!("{} {}", node.name, node.version), &query) {
+                    self.search_matches.push(id);
+                }
+            }
+        }
+
+        if !self.search_matches.is_empty() {
+            self.search_selected = Some(0);
+            self.selected = Some(self.search_matches[0]);
+        }
+
+        self.dirty = true;
+    }
+
+    /// Move to the next match when searching or when highlights are persisted.
+    pub fn next_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let idx = self.search_selected.unwrap_or(0);
+        let next = (idx + 1) % self.search_matches.len();
+        self.search_selected = Some(next);
+        self.selected = Some(self.search_matches[next]);
+    }
+
+    /// Move to the previous match.
+    pub fn previous_match(&mut self) {
+        if self.search_matches.is_empty() {
+            return;
+        }
+        let idx = self.search_selected.unwrap_or(0);
+        let prev = if idx == 0 { self.search_matches.len() - 1 } else { idx - 1 };
+        self.search_selected = Some(prev);
+        self.selected = Some(self.search_matches[prev]);
+    }
+
+    /// Commit the current search: stop live-editing but keep highlights.
+    pub fn commit_search(&mut self) {
+        self.search_active = false;
+        self.search_persist = true;
+        self.prev_selected = None;
+        self.dirty = true;
+    }
+
+    /// Cancel the active search and optionally restore selection.
+    pub fn cancel_search(&mut self, restore: bool) {
+        self.search_active = false;
+        self.search_query.clear();
+        self.search_matches.clear();
+        self.search_selected = None;
+        self.search_persist = false;
+        if restore {
+            self.selected = self.prev_selected;
+        }
+        self.prev_selected = None;
+        self.dirty = true;
+    }
+
     /// Returns the index of the selected node among visible nodes.
     pub fn selected_position(&mut self, tree: &DependencyTree) -> Option<usize> {
         if !self.ensure_selection(tree) {
@@ -437,4 +590,36 @@ impl TreeWidgetState {
         self.dirty = true;
         self.ensure_selection(tree);
     }
+}
+
+/// Returns true if `text` matches `query` by prefix or subsequence (character order).
+fn matches_query(text: &str, query: &str) -> bool {
+    let text = text.to_lowercase();
+    let query = query.to_lowercase();
+    if query.is_empty() {
+        return false;
+    }
+
+    // Prefix match is considered a strong match.
+    if text.starts_with(&query) {
+        return true;
+    }
+
+    // Subsequence match: all characters of query appear in order within text.
+    let mut qi = query.chars();
+    let mut current = qi.next();
+    if current.is_none() {
+        return false;
+    }
+
+    for c in text.chars() {
+        if Some(c) == current {
+            current = qi.next();
+            if current.is_none() {
+                return true;
+            }
+        }
+    }
+
+    false
 }

@@ -148,6 +148,9 @@ impl<'a> RenderContext<'a> {
 
         let name_style = if lineage.is_selected {
             self.style.highlight_style
+        } else if self.state.search_matches.contains(&node.id) {
+            // Highlight search matches even when not selected.
+            self.style.highlight_style
         } else {
             self.style.name_style
         };

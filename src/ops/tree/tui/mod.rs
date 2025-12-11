@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Paragraph, Scrollbar, ScrollbarOrientation},
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation},
 };
 
 use help::HelpPopup;
@@ -15,13 +15,41 @@ use state::TuiState;
 use widget::TreeWidget;
 
 pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
-    let [tree_area, help_text_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
-    draw_tree(frame, tree_area, state);
-    draw_help_text(frame, help_text_area);
+    if state.tree_widget_state.search_active {
+        // Reserve an extra line (with border) for the active search box above the help line.
+        let [tree_area, search_area, help_text_area] = Layout::vertical([
+            Constraint::Fill(1),
+            Constraint::Length(3),
+            Constraint::Length(1),
+        ])
+        .areas(frame.area());
+
+        draw_tree(frame, tree_area, state);
+        draw_search_box(frame, search_area, state);
+        draw_help_text(frame, help_text_area);
+    } else {
+        let [tree_area, help_text_area] =
+            Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
+        draw_tree(frame, tree_area, state);
+        draw_help_text(frame, help_text_area);
+    }
     if state.show_help {
         draw_help_popup(frame);
     }
+}
+
+pub fn draw_search_box(frame: &mut Frame, area: Rect, state: &mut TuiState) {
+    // Show a bordered box with the current query; when empty it still shows the box
+    // so the user knows they're in search mode.
+    let query = state.tree_widget_state.search_query.clone();
+    let text = Line::from(vec![Span::raw(query)]);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(Span::styled(" Search ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+
+    let paragraph = Paragraph::new(text).block(block).style(Style::default().bg(Color::Black).fg(Color::White));
+    frame.render_widget(paragraph, area);
 }
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
@@ -44,6 +72,8 @@ pub fn draw_help_text(frame: &mut Frame, area: Rect) {
     let text = Line::from(vec![
         " q ".bold(),
         Span::styled(" QUIT ", key_style),
+        " / ".bold(),
+        Span::styled(" SEARCH ", key_style),
         " ? ".bold(),
         Span::styled(" HELP ", key_style),
     ]);
