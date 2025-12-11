@@ -1,10 +1,8 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use cargo_metadata::{MetadataCommand, Node, Package, PackageId, TargetKind};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Key type for uniquely identifying nodes in the dependency tree.
 ///
@@ -87,7 +85,7 @@ impl DependencyTree {
         // Main tree construction (these types will be filled in during recursion).
         let mut nodes = Vec::new();
         let mut roots = Vec::new();
-        let mut node_map: HashMap<NodeKey, NodeId> = HashMap::new();
+        let mut node_map: HashMap<NodeKey, NodeId> = HashMap::default();
 
         // For only including packages that belong to the current workspace
         // to avoid third-party crates.
