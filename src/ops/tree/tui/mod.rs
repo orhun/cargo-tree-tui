@@ -44,11 +44,16 @@ pub fn draw_search_box(frame: &mut Frame, area: Rect, state: &mut TuiState) {
     let query = state.tree_widget_state.search_query.clone();
     let text = Line::from(vec![Span::raw(query)]);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(Span::styled(" Search ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)));
+    let block = Block::default().borders(Borders::ALL).title(Span::styled(
+        " Search ",
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
 
-    let paragraph = Paragraph::new(text).block(block).style(Style::default().bg(Color::Black).fg(Color::White));
+    let paragraph = Paragraph::new(text)
+        .block(block)
+        .style(Style::default().bg(Color::Black).fg(Color::White));
     frame.render_widget(paragraph, area);
 }
 

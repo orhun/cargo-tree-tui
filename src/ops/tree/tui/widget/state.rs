@@ -377,7 +377,9 @@ impl TreeWidgetState {
         // nodes that should be shown: all ancestors of matched nodes plus the
         // matched nodes themselves. This displays a pruned tree where matches
         // appear as leaves and the path to them is visible.
-        if (!self.search_query.is_empty() && (self.search_active || self.search_persist)) && !self.search_matches.is_empty() {
+        if (!self.search_query.is_empty() && (self.search_active || self.search_persist))
+            && !self.search_matches.is_empty()
+        {
             let mut show_set: HashSet<NodeId> = HashSet::new();
             for &m in &self.search_matches {
                 let mut cur = Some(m);
@@ -401,7 +403,14 @@ impl TreeWidgetState {
             }
 
             for &root in tree.roots() {
-                Self::collect_visible_filtered(&self.open, tree, root, 0, &mut self.visible_cache, &show_set);
+                Self::collect_visible_filtered(
+                    &self.open,
+                    tree,
+                    root,
+                    0,
+                    &mut self.visible_cache,
+                    &show_set,
+                );
             }
         } else {
             let open = &self.open;
@@ -496,7 +505,9 @@ impl TreeWidgetState {
         for i in 0..tree.nodes.len() {
             let id = NodeId(i);
             if let Some(node) = tree.node(id) {
-                if matches_query(&node.name, &query) || matches_query(&format!("{} {}", node.name, node.version), &query) {
+                if matches_query(&node.name, &query)
+                    || matches_query(&format!("{} {}", node.name, node.version), &query)
+                {
                     self.search_matches.push(id);
                 }
             }
@@ -527,7 +538,11 @@ impl TreeWidgetState {
             return;
         }
         let idx = self.search_selected.unwrap_or(0);
-        let prev = if idx == 0 { self.search_matches.len() - 1 } else { idx - 1 };
+        let prev = if idx == 0 {
+            self.search_matches.len() - 1
+        } else {
+            idx - 1
+        };
         self.search_selected = Some(prev);
         self.selected = Some(self.search_matches[prev]);
     }
