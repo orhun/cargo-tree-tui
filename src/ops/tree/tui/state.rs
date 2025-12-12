@@ -38,7 +38,6 @@ impl TuiState {
         }
 
         match (key_event.code, key_event.modifiers) {
-            
             (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
