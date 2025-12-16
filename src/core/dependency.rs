@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{MetadataCommand, Node, Package, PackageId, TargetKind};
+use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
+use ratatui::style::{Color, Style};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Key type for uniquely identifying nodes in the dependency tree.
@@ -16,6 +17,46 @@ type NodeKey = (PackageId, Option<NodeId>);
 /// This is used for efficient storage and traversal of the tree structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DependencyType {
+    Normal,
+    Dev,
+    Build,
+}
+
+impl DependencyType {
+    pub fn label(&self) -> String {
+        match self {
+            Self::Normal => "[dependencies]".to_string(),
+            Self::Dev => "[dev-dependencies]".to_string(),
+            Self::Build => "[build-dependencies]".to_string(),
+        }
+    }
+
+    pub fn style(&self) -> Style {
+        match self {
+            Self::Normal => Style::default(),
+            Self::Dev => Style::default().fg(Color::Magenta),
+            Self::Build => Style::default().fg(Color::Blue),
+        }
+    }
+
+    fn from_dependency_kind(kind: DependencyKind) -> Option<Self> {
+        match kind {
+            DependencyKind::Normal => Some(Self::Normal),
+            DependencyKind::Development => Some(Self::Dev),
+            DependencyKind::Build => Some(Self::Build),
+            DependencyKind::Unknown => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DependencyEdge {
+    pub target: NodeId,
+    pub kind: DependencyType,
+}
 
 /// Flat representation of a dependency node in the tree.
 ///
@@ -33,7 +74,7 @@ pub struct Dependency {
     /// Optional parent pointer for quick upward navigation.
     pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
-    pub children: Vec<NodeId>,
+    pub children: Vec<DependencyEdge>,
 }
 
 /// Container for the resolved dependency tree scoped to the current workspace.
@@ -185,14 +226,22 @@ impl DependencyTree {
                 .deps
                 .iter()
                 .filter_map(|dep| {
-                    Self::build_dependency_node(
+                    let dependency_type = dep
+                        .dep_kinds
+                        .iter()
+                        .find_map(|kind| DependencyType::from_dependency_kind(kind.kind))?;
+                    let child_id = Self::build_dependency_node(
                         &dep.pkg,
                         Some(node_id),
                         resolve_nodes,
                         package_map,
                         node_map,
                         nodes,
-                    )
+                    )?;
+                    Some(DependencyEdge {
+                        target: child_id,
+                        kind: dependency_type,
+                    })
                 })
                 .collect();
             nodes[node_id.0].children = children;
