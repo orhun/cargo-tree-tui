@@ -26,7 +26,7 @@ pub enum DependencyType {
 }
 
 impl DependencyType {
-    fn label(&self) -> String {
+    pub fn label(&self) -> String {
         match self {
             Self::Normal => "[dependencies]".to_string(),
             Self::Dev => "[dev-dependencies]".to_string(),

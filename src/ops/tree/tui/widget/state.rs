@@ -1,8 +1,20 @@
 use std::collections::HashSet;
 
-use crate::core::{DependencyTree, NodeId};
+use crate::core::{DependencyTree, DependencyType, NodeId};
 
 use super::viewport::Viewport;
+
+/// UI-level representation of an item in the dependency tree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TreeItem {
+    Crate {
+        id: NodeId,
+    },
+    DependencyGroup {
+        parent: NodeId,
+        kind: DependencyType,
+    },
+}
 
 /// [`TreeWidget`] state that tracks open nodes and the current selection.
 ///
@@ -10,22 +22,22 @@ use super::viewport::Viewport;
 #[derive(Debug)]
 pub struct TreeWidgetState {
     /// Set of expanded nodes.
-    pub open: HashSet<NodeId>,
+    pub open: HashSet<TreeItem>,
     /// Currently selected node.
-    pub selected: Option<NodeId>,
+    pub selected: Option<TreeItem>,
     /// Current viewport.
     viewport: Viewport,
     /// Cached visible nodes.
-    visible_cache: Vec<VisibleNode>,
+    visible_cache: Vec<VisibleRow>,
     /// Indicates whether the visible cache is outdated.
     dirty: bool,
 }
 
-/// Visible node metadata used for navigation.
+/// Visible item metadata used for navigation.
 #[derive(Debug, Clone, Copy)]
-pub struct VisibleNode {
-    /// Node identifier.
-    pub id: NodeId,
+pub struct VisibleRow {
+    /// Visible tree item.
+    pub item: TreeItem,
     /// Depth in the tree hierarchy.
     pub depth: usize,
 }
@@ -42,6 +54,89 @@ impl Default for TreeWidgetState {
     }
 }
 
+/// Returns the parent [`TreeItem`] in the UI hierarchy.
+pub(crate) fn ui_parent(tree: &DependencyTree, item: TreeItem) -> Option<TreeItem> {
+    match item {
+        TreeItem::Crate { id } => {
+            let node = tree.node(id)?;
+            let parent_id = node.parent?;
+            let parent_node = tree.node(parent_id)?;
+            let edge_kind = parent_node
+                .children
+                .iter()
+                .find(|edge| edge.target == id)?
+                .kind;
+
+            match edge_kind {
+                DependencyType::Normal => Some(TreeItem::Crate { id: parent_id }),
+                kind => Some(TreeItem::DependencyGroup {
+                    parent: parent_id,
+                    kind,
+                }),
+            }
+        }
+        TreeItem::DependencyGroup { parent, .. } => Some(TreeItem::Crate { id: parent }),
+    }
+}
+
+/// Returns the ordered UI children of a given [`TreeItem`].
+pub(crate) fn child_items(tree: &DependencyTree, item: TreeItem) -> Vec<TreeItem> {
+    match item {
+        TreeItem::Crate { id } => crate_child_items(tree, id),
+        TreeItem::DependencyGroup { parent, kind } => group_children(tree, parent, kind),
+    }
+}
+
+/// Returns siblings for the given [`TreeItem`] within the UI tree.
+pub(crate) fn siblings_of(tree: &DependencyTree, item: TreeItem) -> Vec<TreeItem> {
+    if let Some(parent) = ui_parent(tree, item) {
+        child_items(tree, parent)
+    } else {
+        tree.roots()
+            .iter()
+            .map(|&id| TreeItem::Crate { id })
+            .collect()
+    }
+}
+
+fn crate_child_items(tree: &DependencyTree, id: NodeId) -> Vec<TreeItem> {
+    let Some(node) = tree.node(id) else {
+        return Vec::new();
+    };
+
+    let mut items = Vec::new();
+    let mut group_order = Vec::new();
+
+    for edge in &node.children {
+        match edge.kind {
+            DependencyType::Normal => items.push(TreeItem::Crate { id: edge.target }),
+            kind => {
+                if !group_order.contains(&kind) {
+                    group_order.push(kind);
+                }
+            }
+        }
+    }
+
+    for kind in group_order {
+        items.push(TreeItem::DependencyGroup { parent: id, kind });
+    }
+
+    items
+}
+
+fn group_children(tree: &DependencyTree, parent: NodeId, kind: DependencyType) -> Vec<TreeItem> {
+    let Some(node) = tree.node(parent) else {
+        return Vec::new();
+    };
+
+    node.children
+        .iter()
+        .filter(|edge| edge.kind == kind)
+        .map(|edge| TreeItem::Crate { id: edge.target })
+        .collect()
+}
+
 impl TreeWidgetState {
     /// Moves the selection to the next visible dependency.
     pub fn select_next(&mut self, tree: &DependencyTree) {
@@ -50,21 +145,21 @@ impl TreeWidgetState {
         }
 
         let selected = match self.selected {
-            Some(id) => id,
+            Some(item) => item,
             None => return,
         };
 
         let next = {
-            let visible = self.visible_nodes(tree);
+            let visible = self.visible_rows(tree);
             let Some(current_index) = Self::selected_index(visible, selected) else {
                 return;
             };
 
-            visible.get(current_index + 1).map(|node| node.id)
+            visible.get(current_index + 1).map(|row| row.item)
         };
 
-        if let Some(next_id) = next {
-            self.selected = Some(next_id);
+        if let Some(next_item) = next {
+            self.selected = Some(next_item);
         }
     }
 
@@ -75,25 +170,25 @@ impl TreeWidgetState {
         }
 
         let selected = match self.selected {
-            Some(id) => id,
+            Some(item) => item,
             None => return,
         };
 
         let previous = {
-            let visible = self.visible_nodes(tree);
+            let visible = self.visible_rows(tree);
             let Some(current_index) = Self::selected_index(visible, selected) else {
                 return;
             };
 
             if current_index > 0 {
-                Some(visible[current_index - 1].id)
+                Some(visible[current_index - 1].item)
             } else {
                 None
             }
         };
 
-        if let Some(previous_id) = previous {
-            self.selected = Some(previous_id);
+        if let Some(previous_item) = previous {
+            self.selected = Some(previous_item);
         }
     }
 
@@ -104,17 +199,14 @@ impl TreeWidgetState {
         }
 
         let selected = match self.selected {
-            Some(id) => id,
+            Some(item) => item,
             None => return,
         };
 
-        let Some(node) = tree.node(selected) else {
+        let children = child_items(tree, selected);
+        if children.is_empty() {
             return;
         };
-
-        if node.children.is_empty() {
-            return;
-        }
 
         if self.open.insert(selected) {
             self.insert_descendants(selected, tree);
@@ -122,7 +214,9 @@ impl TreeWidgetState {
             return;
         }
 
-        self.selected = Some(node.children[0].target);
+        if let Some(first_child) = children.first() {
+            self.selected = Some(*first_child);
+        }
     }
 
     /// Collapses the selected node or moves focus to its parent when already closed.
@@ -132,23 +226,21 @@ impl TreeWidgetState {
         }
 
         let selected = match self.selected {
-            Some(id) => id,
+            Some(item) => item,
             None => return,
         };
 
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
+        let has_children = !child_items(tree, selected).is_empty();
 
         // If the node has children and is open, close it first.
-        if !node.children.is_empty() && self.open.remove(&selected) {
+        if has_children && self.open.remove(&selected) {
             self.prune_descendants(selected);
             self.dirty = false;
             return;
         }
 
         // Otherwise move focus to its parent when possible.
-        if let Some(parent) = node.parent {
+        if let Some(parent) = ui_parent(tree, selected) {
             self.selected = Some(parent);
         }
     }
@@ -158,12 +250,9 @@ impl TreeWidgetState {
         let Some(selected) = self.selected else {
             return;
         };
-
-        if let Some(node) = tree.node(selected)
-            && let Some(parent) = node.parent
-        {
+        if let Some(parent) = ui_parent(tree, selected) {
             self.selected = Some(parent);
-        }
+        };
     }
 
     /// Moves the selection to the next sibling, if any.
@@ -171,24 +260,8 @@ impl TreeWidgetState {
         let Some(selected) = self.selected else {
             return;
         };
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
-
-        let siblings: Vec<NodeId> = if let Some(parent) = node.parent {
-            let Some(parent_node) = tree.node(parent) else {
-                return;
-            };
-            parent_node
-                .children
-                .iter()
-                .map(|edge| edge.target)
-                .collect()
-        } else {
-            tree.roots().to_vec()
-        };
-
-        let Some(pos) = siblings.iter().position(|&id| id == selected) else {
+        let siblings = siblings_of(tree, selected);
+        let Some(pos) = siblings.iter().position(|&item| item == selected) else {
             return;
         };
 
@@ -202,24 +275,8 @@ impl TreeWidgetState {
         let Some(selected) = self.selected else {
             return;
         };
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
-
-        let siblings: Vec<NodeId> = if let Some(parent) = node.parent {
-            let Some(parent_node) = tree.node(parent) else {
-                return;
-            };
-            parent_node
-                .children
-                .iter()
-                .map(|edge| edge.target)
-                .collect()
-        } else {
-            tree.roots().to_vec()
-        };
-
-        let Some(pos) = siblings.iter().position(|&id| id == selected) else {
+        let siblings = siblings_of(tree, selected);
+        let Some(pos) = siblings.iter().position(|&item| item == selected) else {
             return;
         };
 
@@ -247,12 +304,12 @@ impl TreeWidgetState {
         }
 
         let selected = match self.selected {
-            Some(id) => id,
+            Some(item) => item,
             None => return,
         };
 
         let next = {
-            let visible = self.visible_nodes(tree);
+            let visible = self.visible_rows(tree);
             let Some(current_index) = Self::selected_index(visible, selected) else {
                 return;
             };
@@ -269,11 +326,11 @@ impl TreeWidgetState {
                 next_index = len - 1;
             }
 
-            visible.get(next_index as usize).map(|node| node.id)
+            visible.get(next_index as usize).map(|row| row.item)
         };
 
-        if let Some(next_id) = next {
-            self.selected = Some(next_id);
+        if let Some(next_item) = next {
+            self.selected = Some(next_item);
         }
     }
 
@@ -284,36 +341,35 @@ impl TreeWidgetState {
         }
         self.open.clear();
         for &root in tree.roots() {
-            self.open_node(tree, root, 1, max_depth);
+            self.open_node(tree, TreeItem::Crate { id: root }, 1, max_depth);
         }
         self.dirty = true;
         self.ensure_selection(tree);
     }
 
-    fn open_node(&mut self, tree: &DependencyTree, id: NodeId, depth: usize, max_depth: usize) {
+    fn open_node(&mut self, tree: &DependencyTree, item: TreeItem, depth: usize, max_depth: usize) {
         if depth >= max_depth {
             return;
         }
 
-        if let Some(node) = tree.node(id) {
-            // Do not mark leaves as open to avoid confusing collapse semantics.
-            if node.children.is_empty() {
-                return;
-            }
+        let children = child_items(tree, item);
+        // Do not mark leaves as open to avoid confusing collapse semantics.
+        if children.is_empty() {
+            return;
+        }
 
-            self.open.insert(id);
-            for child in &node.children {
-                self.open_node(tree, child.target, depth + 1, max_depth);
-            }
+        self.open.insert(item);
+        for child in children {
+            self.open_node(tree, child, depth + 1, max_depth);
         }
     }
 
     /// Removes all descendants of `id` from the visible cache in-place.
-    fn prune_descendants(&mut self, id: NodeId) {
-        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
+    fn prune_descendants(&mut self, item: TreeItem) {
+        let Some(start) = self.visible_cache.iter().position(|row| row.item == item) else {
             return;
         };
-        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
+        let Some(depth) = self.visible_cache.get(start).map(|row| row.depth) else {
             return;
         };
 
@@ -324,7 +380,7 @@ impl TreeWidgetState {
 
         let end = self.visible_cache[first_descendant..]
             .iter()
-            .position(|node| node.depth <= depth)
+            .position(|row| row.depth <= depth)
             .map(|offset| first_descendant + offset)
             .unwrap_or(self.visible_cache.len());
 
@@ -332,16 +388,16 @@ impl TreeWidgetState {
     }
 
     /// Inserts the visible descendants of `id` into the cache in-place.
-    fn insert_descendants(&mut self, id: NodeId, tree: &DependencyTree) {
-        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
+    fn insert_descendants(&mut self, item: TreeItem, tree: &DependencyTree) {
+        let Some(start) = self.visible_cache.iter().position(|row| row.item == item) else {
             return;
         };
-        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
+        let Some(depth) = self.visible_cache.get(start).map(|row| row.depth) else {
             return;
         };
 
         let mut subtree = Vec::new();
-        Self::collect_visible(&self.open, tree, id, depth, &mut subtree);
+        Self::collect_visible(&self.open, tree, item, depth, &mut subtree);
         if subtree.len() <= 1 {
             return;
         }
@@ -352,7 +408,7 @@ impl TreeWidgetState {
     }
 
     /// Returns cached visible nodes along with their depth in the hierarchy.
-    pub fn visible_nodes(&mut self, tree: &DependencyTree) -> &[VisibleNode] {
+    pub fn visible_rows(&mut self, tree: &DependencyTree) -> &[VisibleRow] {
         if self.dirty {
             self.rebuild_visible(tree);
             self.dirty = false;
@@ -364,27 +420,31 @@ impl TreeWidgetState {
         self.visible_cache.clear();
         let open = &self.open;
         for &root in tree.roots() {
-            Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+            Self::collect_visible(
+                open,
+                tree,
+                TreeItem::Crate { id: root },
+                0,
+                &mut self.visible_cache,
+            );
         }
     }
 
     fn collect_visible(
-        open: &HashSet<NodeId>,
+        open: &HashSet<TreeItem>,
         tree: &DependencyTree,
-        id: NodeId,
+        item: TreeItem,
         depth: usize,
-        out: &mut Vec<VisibleNode>,
+        out: &mut Vec<VisibleRow>,
     ) {
-        out.push(VisibleNode { id, depth });
+        out.push(VisibleRow { item, depth });
 
-        if !open.contains(&id) {
+        if !open.contains(&item) {
             return;
         }
 
-        if let Some(node) = tree.node(id) {
-            for child in &node.children {
-                Self::collect_visible(open, tree, child.target, depth + 1, out);
-            }
+        for child in child_items(tree, item) {
+            Self::collect_visible(open, tree, child, depth + 1, out);
         }
     }
 
@@ -392,7 +452,7 @@ impl TreeWidgetState {
     ///
     /// Returns `true` if a valid selection exists after the operation.
     fn ensure_selection(&mut self, tree: &DependencyTree) -> bool {
-        let _ = self.visible_nodes(tree);
+        let _ = self.visible_rows(tree);
 
         if self.visible_cache.is_empty() {
             self.selected = None;
@@ -400,12 +460,12 @@ impl TreeWidgetState {
         }
 
         if let Some(selected) = self.selected
-            && self.visible_cache.iter().any(|node| node.id == selected)
+            && self.visible_cache.iter().any(|row| row.item == selected)
         {
             return true;
         }
 
-        self.selected = Some(self.visible_cache[0].id);
+        self.selected = Some(self.visible_cache[0].item);
         true
     }
 
@@ -416,13 +476,13 @@ impl TreeWidgetState {
         }
 
         let selected = self.selected?;
-        let visible = self.visible_nodes(tree);
+        let visible = self.visible_rows(tree);
         Self::selected_index(visible, selected)
     }
 
     /// Helper to find the index of the selected node in the visible list.
-    fn selected_index(visible: &[VisibleNode], target: NodeId) -> Option<usize> {
-        visible.iter().position(|node| node.id == target)
+    fn selected_index(visible: &[VisibleRow], target: TreeItem) -> Option<usize> {
+        visible.iter().position(|row| row.item == target)
     }
 
     /// Updates the available viewport.
@@ -433,14 +493,8 @@ impl TreeWidgetState {
     /// Expands all nodes in the tree.
     pub fn expand_all(&mut self, tree: &DependencyTree) {
         self.open.clear();
-        for i in 0..tree.nodes.len() {
-            let id = NodeId(i);
-            if let Some(node) = tree.node(id) {
-                // Only mark non-leaf nodes as open, leaves stay implicit.
-                if !node.children.is_empty() {
-                    self.open.insert(id);
-                }
-            }
+        for &root in tree.roots() {
+            self.open_node(tree, TreeItem::Crate { id: root }, 1, usize::MAX);
         }
         self.dirty = true;
         self.ensure_selection(tree);

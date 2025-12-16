@@ -9,7 +9,7 @@ use crate::core::{Dependency, DependencyTree};
 
 use super::{
     lineage::Lineage,
-    state::{TreeWidgetState, VisibleNode},
+    state::{TreeItem, TreeWidgetState, VisibleRow, child_items, ui_parent},
     style::TreeWidgetStyle,
     viewport::Viewport,
 };
@@ -51,11 +51,11 @@ impl<'a> RenderContext<'a> {
             return RenderOutput::default();
         };
 
-        let visible_nodes = self.state.visible_nodes(self.tree).to_vec();
+        let visible_rows = self.state.visible_rows(self.tree).to_vec();
         let root_line_offset = usize::from(self.root_label.is_some());
 
         let selected_line = selected_idx + root_line_offset + 1;
-        let total_lines = visible_nodes.len() + root_line_offset;
+        let total_lines = visible_rows.len() + root_line_offset;
 
         let viewport = Viewport::new(area, self.block, selected_line, total_lines);
         self.state.update_viewport(viewport);
@@ -76,24 +76,24 @@ impl<'a> RenderContext<'a> {
             }
 
             let available = viewport.height.saturating_sub(lines.len());
-            let max_nodes = available.min(visible_nodes.len());
+            let max_nodes = available.min(visible_rows.len());
 
-            for node in visible_nodes.iter().take(max_nodes) {
-                if let Some(line) = self.render_node(node) {
+            for row in visible_rows.iter().take(max_nodes) {
+                if let Some(line) = self.render_row(row) {
                     lines.push(line);
                 }
             }
         } else {
             lines.push(self.breadcrumb());
 
-            let total_lines = visible_nodes.len() + root_line_offset;
+            let total_lines = visible_rows.len() + root_line_offset;
 
             let start_flat = viewport.offset + 1;
             let end_flat = (viewport.offset + viewport.height).min(total_lines);
             for flat_id in start_flat..end_flat {
                 let node_id = flat_id.saturating_sub(root_line_offset);
-                if let Some(node) = visible_nodes.get(node_id)
-                    && let Some(line) = self.render_node(node)
+                if let Some(row) = visible_rows.get(node_id)
+                    && let Some(line) = self.render_row(row)
                 {
                     lines.push(line);
                 }
@@ -107,13 +107,12 @@ impl<'a> RenderContext<'a> {
         }
     }
 
-    pub fn render_node(&self, node: &VisibleNode) -> Option<Line<'a>> {
-        let node_data = self.tree.node(node.id)?;
-        let lineage = Lineage::build(self.tree, node.id, self.state.selected)?;
-        let has_children = !node_data.children.is_empty();
-        let is_open = self.state.open.contains(&node.id);
+    pub fn render_row(&self, row: &VisibleRow) -> Option<Line<'a>> {
+        let lineage = Lineage::build(self.tree, row.item, self.state.selected)?;
+        let has_children = !child_items(self.tree, row.item).is_empty();
+        let is_open = self.state.open.contains(&row.item);
 
-        let is_root = node_data.parent.is_none();
+        let is_root = ui_parent(self.tree, row.item).is_none();
         let allow_root_connector = if lineage.depth() <= 1 {
             self.root_label.is_some()
         } else {
@@ -152,14 +151,27 @@ impl<'a> RenderContext<'a> {
             self.style.name_style
         };
 
-        spans.push(Span::styled(node_data.name.clone(), name_style));
-        spans.push(Span::styled(
-            format!(" v{}", node_data.version),
-            self.style.version_style,
-        ));
+        match row.item {
+            TreeItem::Crate { id } => {
+                let node_data = self.tree.node(id)?;
+                spans.push(Span::styled(node_data.name.clone(), name_style));
+                spans.push(Span::styled(
+                    format!(" v{}", node_data.version),
+                    self.style.version_style,
+                ));
 
-        if let Some(extra) = format_suffixes(node_data, self.style) {
-            spans.extend(extra);
+                if let Some(extra) = format_suffixes(node_data, self.style) {
+                    spans.extend(extra);
+                }
+            }
+            TreeItem::DependencyGroup { kind, .. } => {
+                let label_style = if lineage.is_selected {
+                    self.style.highlight_style
+                } else {
+                    self.style.style.patch(kind.style())
+                };
+                spans.push(Span::styled(kind.label(), label_style));
+            }
         }
 
         Some(Line::from(spans))
@@ -169,13 +181,19 @@ impl<'a> RenderContext<'a> {
         let mut names = Vec::new();
         let mut current = self.state.selected;
 
-        while let Some(id) = current {
-            if let Some(node) = self.tree.node(id) {
-                names.push(node.name.clone());
-                current = node.parent;
-            } else {
-                break;
+        while let Some(item) = current {
+            match item {
+                TreeItem::Crate { id } => {
+                    if let Some(node) = self.tree.node(id) {
+                        names.push(node.name.clone());
+                    } else {
+                        break;
+                    }
+                }
+                TreeItem::DependencyGroup { kind, .. } => names.push(kind.label()),
             }
+
+            current = ui_parent(self.tree, item);
         }
         names.reverse();
 

@@ -1,6 +1,9 @@
-use crate::core::{DependencyTree, NodeId};
+use crate::core::DependencyTree;
 
-use super::style::TreeWidgetStyle;
+use super::{
+    state::{TreeItem, child_items, ui_parent},
+    style::TreeWidgetStyle,
+};
 
 /// Lineage information for a dependency node.
 #[derive(Debug)]
@@ -15,38 +18,45 @@ pub struct Lineage {
 
 impl Lineage {
     /// Builds lineage information for a node.
-    pub fn build(tree: &DependencyTree, node_id: NodeId, selected: Option<NodeId>) -> Option<Self> {
-        let node = tree.node(node_id)?;
+    pub fn build(
+        tree: &DependencyTree,
+        item: TreeItem,
+        selected: Option<TreeItem>,
+    ) -> Option<Self> {
+        let parent = ui_parent(tree, item);
 
-        let is_last = match node.parent {
-            Some(parent_id) => {
-                let parent = tree.node(parent_id)?;
-                parent.children.last().map(|edge| edge.target) == Some(node_id)
-            }
-            None => true,
+        let is_last = if let Some(parent_item) = parent {
+            let siblings = child_items(tree, parent_item);
+            siblings.last().copied() == Some(item)
+        } else {
+            true
         };
 
         let mut lineage = Vec::new();
-        let mut current = node.parent;
+        let mut current = parent;
 
-        while let Some(ancestor_id) = current {
-            let ancestor = tree.node(ancestor_id)?;
-            let has_more_siblings = if let Some(grand_id) = ancestor.parent {
-                let grand = tree.node(grand_id)?;
-                grand.children.last().map(|edge| edge.target) != Some(ancestor_id)
+        while let Some(ancestor) = current {
+            let grand_parent = ui_parent(tree, ancestor);
+            let has_more_siblings = if let Some(grand) = grand_parent {
+                let siblings = child_items(tree, grand);
+                siblings
+                    .last()
+                    .copied()
+                    .map(|last| last != ancestor)
+                    .unwrap_or(false)
             } else {
                 false
             };
 
             lineage.push(has_more_siblings);
-            current = ancestor.parent;
+            current = grand_parent;
         }
 
         lineage.reverse();
         Some(Lineage {
             segments: lineage,
             is_last,
-            is_selected: selected == Some(node_id),
+            is_selected: selected == Some(item),
         })
     }
 

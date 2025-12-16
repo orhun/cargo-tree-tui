@@ -57,7 +57,7 @@ impl StatefulWidget for TreeWidget<'_> {
     type State = TreeWidgetState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        if state.visible_nodes(self.tree).is_empty() {
+        if state.visible_rows(self.tree).is_empty() {
             return;
         }
 
