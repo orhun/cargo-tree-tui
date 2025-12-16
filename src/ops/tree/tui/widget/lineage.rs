@@ -21,7 +21,7 @@ impl Lineage {
         let is_last = match node.parent {
             Some(parent_id) => {
                 let parent = tree.node(parent_id)?;
-                parent.children.last().copied() == Some(node_id)
+                parent.children.last().map(|edge| edge.target) == Some(node_id)
             }
             None => true,
         };
@@ -33,7 +33,7 @@ impl Lineage {
             let ancestor = tree.node(ancestor_id)?;
             let has_more_siblings = if let Some(grand_id) = ancestor.parent {
                 let grand = tree.node(grand_id)?;
-                grand.children.last().copied() != Some(ancestor_id)
+                grand.children.last().map(|edge| edge.target) != Some(ancestor_id)
             } else {
                 false
             };

@@ -52,6 +52,12 @@ impl DependencyType {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DependencyEdge {
+    pub target: NodeId,
+    pub kind: DependencyType,
+}
+
 /// Flat representation of a dependency node in the tree.
 ///
 /// See [`DependencyTree`] for the full tree structure.
@@ -68,9 +74,7 @@ pub struct Dependency {
     /// Optional parent pointer for quick upward navigation.
     pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
-    pub children: Vec<NodeId>,
-    /// Type of dependency.
-    pub r#type: Option<DependencyType>,
+    pub children: Vec<DependencyEdge>,
 }
 
 /// Container for the resolved dependency tree scoped to the current workspace.
@@ -141,7 +145,6 @@ impl DependencyTree {
             if let Some(dependency) = Self::build_dependency_node(
                 &package.id,
                 None,
-                None,
                 &resolve_nodes,
                 &package_map,
                 &mut node_map,
@@ -176,7 +179,6 @@ impl DependencyTree {
     /// - The `parent` parameter allows tracking the parent node during recursion.
     fn build_dependency_node(
         package_id: &PackageId,
-        dependency_type: Option<DependencyType>,
         parent: Option<NodeId>,
         resolve_nodes: &HashMap<&PackageId, &cargo_metadata::Node>,
         package_map: &HashMap<&PackageId, &cargo_metadata::Package>,
@@ -215,7 +217,6 @@ impl DependencyTree {
             is_proc_macro,
             parent,
             children: Vec::new(),
-            r#type: dependency_type,
         });
         node_map.insert(key, node_id);
 
@@ -228,16 +229,19 @@ impl DependencyTree {
                     let dependency_type = dep
                         .dep_kinds
                         .iter()
-                        .find_map(|kind| DependencyType::from_dependency_kind(kind.kind));
-                    Self::build_dependency_node(
+                        .find_map(|kind| DependencyType::from_dependency_kind(kind.kind))?;
+                    let child_id = Self::build_dependency_node(
                         &dep.pkg,
-                        dependency_type,
                         Some(node_id),
                         resolve_nodes,
                         package_map,
                         node_map,
                         nodes,
-                    )
+                    )?;
+                    Some(DependencyEdge {
+                        target: child_id,
+                        kind: dependency_type,
+                    })
                 })
                 .collect();
             nodes[node_id.0].children = children;

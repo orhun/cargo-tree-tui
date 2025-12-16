@@ -122,7 +122,7 @@ impl TreeWidgetState {
             return;
         }
 
-        self.selected = Some(node.children[0]);
+        self.selected = Some(node.children[0].target);
     }
 
     /// Collapses the selected node or moves focus to its parent when already closed.
@@ -175,13 +175,17 @@ impl TreeWidgetState {
             return;
         };
 
-        let siblings: &[NodeId] = if let Some(parent) = node.parent {
+        let siblings: Vec<NodeId> = if let Some(parent) = node.parent {
             let Some(parent_node) = tree.node(parent) else {
                 return;
             };
-            parent_node.children.as_slice()
+            parent_node
+                .children
+                .iter()
+                .map(|edge| edge.target)
+                .collect()
         } else {
-            tree.roots()
+            tree.roots().to_vec()
         };
 
         let Some(pos) = siblings.iter().position(|&id| id == selected) else {
@@ -202,13 +206,17 @@ impl TreeWidgetState {
             return;
         };
 
-        let siblings: &[NodeId] = if let Some(parent) = node.parent {
+        let siblings: Vec<NodeId> = if let Some(parent) = node.parent {
             let Some(parent_node) = tree.node(parent) else {
                 return;
             };
-            parent_node.children.as_slice()
+            parent_node
+                .children
+                .iter()
+                .map(|edge| edge.target)
+                .collect()
         } else {
-            tree.roots()
+            tree.roots().to_vec()
         };
 
         let Some(pos) = siblings.iter().position(|&id| id == selected) else {
@@ -294,8 +302,8 @@ impl TreeWidgetState {
             }
 
             self.open.insert(id);
-            for &child in &node.children {
-                self.open_node(tree, child, depth + 1, max_depth);
+            for child in &node.children {
+                self.open_node(tree, child.target, depth + 1, max_depth);
             }
         }
     }
@@ -374,8 +382,8 @@ impl TreeWidgetState {
         }
 
         if let Some(node) = tree.node(id) {
-            for &child in &node.children {
-                Self::collect_visible(open, tree, child, depth + 1, out);
+            for child in &node.children {
+                Self::collect_visible(open, tree, child.target, depth + 1, out);
             }
         }
     }
