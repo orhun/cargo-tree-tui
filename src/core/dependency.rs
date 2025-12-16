@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{MetadataCommand, Node, Package, PackageId, TargetKind};
+use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
+use ratatui::style::{Color, Style};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Key type for uniquely identifying nodes in the dependency tree.
@@ -16,6 +17,43 @@ type NodeKey = (PackageId, Option<NodeId>);
 /// This is used for efficient storage and traversal of the tree structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DependencyType {
+    Normal,
+    Dev,
+    Build,
+}
+
+impl DependencyType {
+    fn label(&self) -> String {
+        match self {
+            Self::Normal => "[dependencies]".to_string(),
+            Self::Dev => "[dev-dependencies]".to_string(),
+            Self::Build => "[build-dependencies]".to_string(),
+        }
+    }
+
+    pub fn style(&self) -> Style {
+        match self {
+            Self::Normal => Style::default(),
+            Self::Dev => Style::default().fg(Color::Magenta),
+            Self::Build => Style::default().fg(Color::Blue),
+        }
+    }
+}
+
+impl TryFrom<DependencyKind> for DependencyType {
+    type Error = ();
+    fn try_from(value: DependencyKind) -> Result<Self, Self::Error> {
+        match value {
+            DependencyKind::Normal => Ok(Self::Normal),
+            DependencyKind::Development => Ok(Self::Dev),
+            DependencyKind::Build => Ok(Self::Build),
+            _ => Err(()),
+        }
+    }
+}
 
 /// Flat representation of a dependency node in the tree.
 ///
@@ -34,6 +72,8 @@ pub struct Dependency {
     pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
     pub children: Vec<NodeId>,
+    /// Type of dependency.
+    pub r#type: Option<DependencyType>,
 }
 
 /// Container for the resolved dependency tree scoped to the current workspace.
@@ -104,6 +144,7 @@ impl DependencyTree {
             if let Some(dependency) = Self::build_dependency_node(
                 &package.id,
                 None,
+                None,
                 &resolve_nodes,
                 &package_map,
                 &mut node_map,
@@ -138,6 +179,7 @@ impl DependencyTree {
     /// - The `parent` parameter allows tracking the parent node during recursion.
     fn build_dependency_node(
         package_id: &PackageId,
+        dependency_type: Option<DependencyType>,
         parent: Option<NodeId>,
         resolve_nodes: &HashMap<&PackageId, &cargo_metadata::Node>,
         package_map: &HashMap<&PackageId, &cargo_metadata::Package>,
@@ -176,6 +218,7 @@ impl DependencyTree {
             is_proc_macro,
             parent,
             children: Vec::new(),
+            r#type: dependency_type,
         });
         node_map.insert(key, node_id);
 
@@ -185,8 +228,13 @@ impl DependencyTree {
                 .deps
                 .iter()
                 .filter_map(|dep| {
+                    let dependency_type = dep
+                        .dep_kinds
+                        .iter()
+                        .find_map(|kind| DependencyType::try_from(kind.kind).ok());
                     Self::build_dependency_node(
                         &dep.pkg,
+                        dependency_type,
                         Some(node_id),
                         resolve_nodes,
                         package_map,
