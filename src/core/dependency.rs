@@ -1,7 +1,8 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{MetadataCommand, Node, Package, PackageId, TargetKind};
+use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
+use ratatui::style::{Color, Style};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Key type for uniquely identifying nodes in the dependency tree.
@@ -16,6 +17,31 @@ type NodeKey = (PackageId, Option<NodeId>);
 /// This is used for efficient storage and traversal of the tree structure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DependencyType {
+    Normal,
+    Dev,
+    Build,
+}
+
+impl DependencyType {
+    fn label(&self) -> String {
+        match self {
+            Self::Normal => "[dependencies]".to_string(),
+            Self::Dev => "[dev-dependencies]".to_string(),
+            Self::Build => "[build-dependencies]".to_string(),
+        }
+    }
+
+    pub fn style(&self) -> Style {
+        match self {
+            Self::Normal => Style::default(),
+            Self::Dev => Style::default().fg(Color::Magenta),
+            Self::Build => Style::default().fg(Color::Blue),
+        }
+    }
+}
 
 /// Flat representation of a dependency node in the tree.
 ///
@@ -34,6 +60,10 @@ pub struct Dependency {
     pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
     pub children: Vec<NodeId>,
+    /// Type of dependency.
+    pub type_: Option<DependencyType>,
+    /// Whether this node is a synthetic dependency group rather than a package.
+    pub is_group: bool,
 }
 
 /// Container for the resolved dependency tree scoped to the current workspace.
@@ -104,6 +134,7 @@ impl DependencyTree {
             if let Some(dependency) = Self::build_dependency_node(
                 &package.id,
                 None,
+                DependencyType::Normal,
                 &resolve_nodes,
                 &package_map,
                 &mut node_map,
@@ -139,6 +170,7 @@ impl DependencyTree {
     fn build_dependency_node(
         package_id: &PackageId,
         parent: Option<NodeId>,
+        dep_type: DependencyType,
         resolve_nodes: &HashMap<&PackageId, &cargo_metadata::Node>,
         package_map: &HashMap<&PackageId, &cargo_metadata::Package>,
         node_map: &mut HashMap<(PackageId, Option<NodeId>), NodeId>,
@@ -176,25 +208,66 @@ impl DependencyTree {
             is_proc_macro,
             parent,
             children: Vec::new(),
+            type_: Some(dep_type),
+            is_group: false,
         });
         node_map.insert(key, node_id);
 
         // Recursively build child nodes.
         if let Some(node) = resolve_nodes.get(package_id) {
-            let children = node
-                .deps
-                .iter()
-                .filter_map(|dep| {
-                    Self::build_dependency_node(
-                        &dep.pkg,
-                        Some(node_id),
-                        resolve_nodes,
-                        package_map,
-                        node_map,
-                        nodes,
-                    )
-                })
-                .collect();
+            let mut group_nodes: HashMap<DependencyType, NodeId> = HashMap::default();
+            let mut children = Vec::new();
+
+            for dep in &node.deps {
+                let next_dep_type = dep
+                    .dep_kinds
+                    .iter()
+                    .filter_map(|kind_info| match kind_info.kind {
+                        DependencyKind::Development => Some(DependencyType::Dev),
+                        DependencyKind::Build => Some(DependencyType::Build),
+                        DependencyKind::Normal => None,
+                        DependencyKind::Unknown => None,
+                    })
+                    .next()
+                    .unwrap_or(DependencyType::Normal);
+
+                let parent_id = if next_dep_type == DependencyType::Normal {
+                    node_id
+                } else {
+                    *group_nodes.entry(next_dep_type).or_insert_with(|| {
+                        let group_id = NodeId(nodes.len());
+                        nodes.push(Dependency {
+                            name: next_dep_type.label(),
+                            version: String::new(),
+                            manifest_dir: None,
+                            is_proc_macro: false,
+                            parent: Some(node_id),
+                            children: Vec::new(),
+                            type_: Some(next_dep_type),
+                            is_group: true,
+                        });
+                        children.push(group_id);
+                        group_id
+                    })
+                };
+
+                if let Some(child) = Self::build_dependency_node(
+                    &dep.pkg,
+                    Some(parent_id),
+                    next_dep_type,
+                    resolve_nodes,
+                    package_map,
+                    node_map,
+                    nodes,
+                ) {
+                    if parent_id == node_id {
+                        children.push(child);
+                    } else {
+                        nodes[parent_id.0].children.push(child);
+                    }
+                }
+            }
+
             nodes[node_id.0].children = children;
         }
 

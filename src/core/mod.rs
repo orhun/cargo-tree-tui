@@ -1,2 +1,2 @@
 pub mod dependency;
-pub use dependency::{Dependency, DependencyTree, NodeId};
+pub use dependency::{Dependency, DependencyTree, DependencyType, NodeId};

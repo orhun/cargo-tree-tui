@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Scrollbar, StatefulWidget},
 };
 
-use crate::core::{Dependency, DependencyTree};
+use crate::core::{Dependency, DependencyTree, DependencyType};
 
 use super::{
     lineage::Lineage,
@@ -114,6 +114,7 @@ impl<'a> RenderContext<'a> {
         let is_open = self.state.open.contains(&node.id);
 
         let is_root = node_data.parent.is_none();
+        let is_group = node_data.is_group;
         let allow_root_connector = if lineage.depth() <= 1 {
             self.root_label.is_some()
         } else {
@@ -121,8 +122,8 @@ impl<'a> RenderContext<'a> {
         };
         let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
-        let indent = lineage.indent(self.style);
         let mut spans = Vec::new();
+        let indent = lineage.indent(self.style);
 
         let toggle = if has_children {
             if is_open {
@@ -135,28 +136,47 @@ impl<'a> RenderContext<'a> {
         };
 
         if show_connector {
+            spans.extend(indent);
             let connector = if lineage.is_last {
                 self.style.last_branch_symbol
             } else {
                 self.style.branch_symbol
             };
-            spans.push(Span::styled(
-                format!("{indent}{connector}{toggle}"),
-                self.style.style,
-            ));
+            if node_data.type_ != Some(DependencyType::Normal) && !is_group {
+                spans.push(Span::styled(
+                    connector.to_string(),
+                    node_data
+                        .type_
+                        .map(|v| v.style())
+                        .unwrap_or(self.style.style),
+                ));
+                spans.push(Span::styled(toggle, self.style.style));
+            } else {
+                spans.push(Span::styled(
+                    format!("{connector}{toggle}"),
+                    self.style.style,
+                ));
+            };
         }
 
         let name_style = if lineage.is_selected {
             self.style.highlight_style
+        } else if is_group {
+            node_data
+                .type_
+                .map(|v| v.style())
+                .unwrap_or(self.style.style)
         } else {
             self.style.name_style
         };
 
         spans.push(Span::styled(node_data.name.clone(), name_style));
-        spans.push(Span::styled(
-            format!(" v{}", node_data.version),
-            self.style.version_style,
-        ));
+        if !is_group {
+            spans.push(Span::styled(
+                format!(" v{}", node_data.version),
+                self.style.version_style,
+            ));
+        }
 
         if let Some(extra) = format_suffixes(node_data, self.style) {
             spans.extend(extra);

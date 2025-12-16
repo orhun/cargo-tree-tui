@@ -1,12 +1,23 @@
-use crate::core::{DependencyTree, NodeId};
+use ratatui::text::Span;
+
+use crate::core::{DependencyTree, DependencyType, NodeId};
 
 use super::style::TreeWidgetStyle;
+
+/// Segment information for each ancestor.
+#[derive(Debug)]
+pub struct LineageSegment {
+    /// Whether there are more siblings at this ancestor level (`true` = draw continuation).
+    pub has_more_siblings: bool,
+    /// Dependency type of the ancestor, used for styling connectors.
+    pub type_: Option<DependencyType>,
+}
 
 /// Lineage information for a dependency node.
 #[derive(Debug)]
 pub struct Lineage {
-    /// For each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
-    pub segments: Vec<bool>,
+    /// For each ancestor from root → parent, connector metadata.
+    pub segments: Vec<LineageSegment>,
     /// Whether the current node is the last child of its parent.
     pub is_last: bool,
     /// Whether this node is the currently selected one.
@@ -38,7 +49,10 @@ impl Lineage {
                 false
             };
 
-            lineage.push(has_more_siblings);
+            lineage.push(LineageSegment {
+                has_more_siblings,
+                type_: ancestor.type_,
+            });
             current = ancestor.parent;
         }
 
@@ -58,15 +72,21 @@ impl Lineage {
         !self.segments.is_empty()
     }
 
-    pub fn indent(&self, style: &TreeWidgetStyle) -> String {
+    pub fn indent<'a>(&self, style: &TreeWidgetStyle) -> Vec<Span<'a>> {
         self.segments
             .iter()
-            .map(|&has_more| {
-                if has_more {
+            .map(|segment| {
+                let symbol = if segment.has_more_siblings {
                     style.continuation_symbol
                 } else {
                     style.empty_symbol
-                }
+                };
+                let span_style = segment
+                    .type_
+                    .filter(|ty| ty != &DependencyType::Normal)
+                    .map(|ty| ty.style())
+                    .unwrap_or(style.style);
+                Span::styled(symbol.to_string(), span_style)
             })
             .collect()
     }
