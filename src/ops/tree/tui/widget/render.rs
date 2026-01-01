@@ -121,7 +121,6 @@ impl<'a> RenderContext<'a> {
         };
         let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
-        let indent = lineage.indent(self.style);
         let mut spans = Vec::new();
 
         let toggle = if has_children {
@@ -135,15 +134,28 @@ impl<'a> RenderContext<'a> {
         };
 
         if show_connector {
+            let mut active_group_style = None;
+            for segment in &lineage.segments {
+                let symbol = if segment.has_more_siblings {
+                    self.style.continuation_symbol
+                } else {
+                    self.style.empty_symbol
+                };
+                if let Some(style) = segment.style {
+                    active_group_style = Some(style);
+                }
+                let segment_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(symbol, segment_style));
+            }
+
             let connector = if lineage.is_last {
                 self.style.last_branch_symbol
             } else {
                 self.style.branch_symbol
             };
-            spans.push(Span::styled(
-                format!("{indent}{connector}{toggle}"),
-                self.style.style,
-            ));
+            let connector_style = active_group_style.unwrap_or(self.style.style);
+            spans.push(Span::styled(connector, connector_style));
+            spans.push(Span::styled(toggle, self.style.style));
         }
 
         let name_style = if lineage.is_selected {
