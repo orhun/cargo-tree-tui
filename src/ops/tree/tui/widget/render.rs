@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Scrollbar, StatefulWidget},
 };
 
-use crate::core::{Dependency, DependencyTree};
+use crate::core::{Dependency, DependencyNode, DependencyTree};
 
 use super::{
     lineage::Lineage,
@@ -110,10 +110,10 @@ impl<'a> RenderContext<'a> {
     pub fn render_node(&self, node: &VisibleNode) -> Option<Line<'a>> {
         let node_data = self.tree.node(node.id)?;
         let lineage = Lineage::build(self.tree, node.id, self.state.selected)?;
-        let has_children = !node_data.children.is_empty();
+        let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.contains(&node.id);
 
-        let is_root = node_data.parent.is_none();
+        let is_root = node_data.parent().is_none();
         let allow_root_connector = if lineage.depth() <= 1 {
             self.root_label.is_some()
         } else {
@@ -121,7 +121,6 @@ impl<'a> RenderContext<'a> {
         };
         let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
 
-        let indent = lineage.indent(self.style);
         let mut spans = Vec::new();
 
         let toggle = if has_children {
@@ -135,15 +134,28 @@ impl<'a> RenderContext<'a> {
         };
 
         if show_connector {
+            let mut active_group_style = None;
+            for segment in &lineage.segments {
+                let symbol = if segment.has_more_siblings {
+                    self.style.continuation_symbol
+                } else {
+                    self.style.empty_symbol
+                };
+                if let Some(style) = segment.style {
+                    active_group_style = Some(style);
+                }
+                let segment_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(symbol, segment_style));
+            }
+
             let connector = if lineage.is_last {
                 self.style.last_branch_symbol
             } else {
                 self.style.branch_symbol
             };
-            spans.push(Span::styled(
-                format!("{indent}{connector}{toggle}"),
-                self.style.style,
-            ));
+            let connector_style = active_group_style.unwrap_or(self.style.style);
+            spans.push(Span::styled(connector, connector_style));
+            spans.push(Span::styled(toggle, self.style.style));
         }
 
         let name_style = if lineage.is_selected {
@@ -152,14 +164,26 @@ impl<'a> RenderContext<'a> {
             self.style.name_style
         };
 
-        spans.push(Span::styled(node_data.name.clone(), name_style));
-        spans.push(Span::styled(
-            format!(" v{}", node_data.version),
-            self.style.version_style,
-        ));
+        match node_data {
+            DependencyNode::Crate(dependency) => {
+                spans.push(Span::styled(dependency.name.clone(), name_style));
+                spans.push(Span::styled(
+                    format!(" v{}", dependency.version),
+                    self.style.version_style,
+                ));
 
-        if let Some(extra) = format_suffixes(node_data, self.style) {
-            spans.extend(extra);
+                if let Some(extra) = format_suffixes(dependency, self.style) {
+                    spans.extend(extra);
+                }
+            }
+            DependencyNode::Group(group) => {
+                let group_style = if lineage.is_selected {
+                    self.style.highlight_style
+                } else {
+                    group.kind.style()
+                };
+                spans.push(Span::styled(group.label().to_string(), group_style));
+            }
         }
 
         Some(Line::from(spans))
@@ -171,8 +195,8 @@ impl<'a> RenderContext<'a> {
 
         while let Some(id) = current {
             if let Some(node) = self.tree.node(id) {
-                names.push(node.name.clone());
-                current = node.parent;
+                names.push(node.display_name().to_string());
+                current = node.parent();
             } else {
                 break;
             }
