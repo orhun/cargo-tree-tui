@@ -18,28 +18,28 @@ impl Lineage {
     pub fn build(tree: &DependencyTree, node_id: NodeId, selected: Option<NodeId>) -> Option<Self> {
         let node = tree.node(node_id)?;
 
-        let is_last = match node.parent {
+        let is_last = match node.parent() {
             Some(parent_id) => {
                 let parent = tree.node(parent_id)?;
-                parent.children.last().copied() == Some(node_id)
+                parent.children().last().copied() == Some(node_id)
             }
             None => true,
         };
 
         let mut lineage = Vec::new();
-        let mut current = node.parent;
+        let mut current = node.parent();
 
         while let Some(ancestor_id) = current {
             let ancestor = tree.node(ancestor_id)?;
-            let has_more_siblings = if let Some(grand_id) = ancestor.parent {
+            let has_more_siblings = if let Some(grand_id) = ancestor.parent() {
                 let grand = tree.node(grand_id)?;
-                grand.children.last().copied() != Some(ancestor_id)
+                grand.children().last().copied() != Some(ancestor_id)
             } else {
                 false
             };
 
             lineage.push(has_more_siblings);
-            current = ancestor.parent;
+            current = ancestor.parent();
         }
 
         lineage.reverse();
