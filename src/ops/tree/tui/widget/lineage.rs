@@ -1,16 +1,21 @@
 use crate::core::{DependencyTree, NodeId};
-
-use super::style::TreeWidgetStyle;
+use ratatui::style::Style;
 
 /// Lineage information for a dependency node.
 #[derive(Debug)]
 pub struct Lineage {
     /// For each ancestor from root → parent, whether there are more siblings (`true` = draw continuation).
-    pub segments: Vec<bool>,
+    pub segments: Vec<LineageSegment>,
     /// Whether the current node is the last child of its parent.
     pub is_last: bool,
     /// Whether this node is the currently selected one.
     pub is_selected: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LineageSegment {
+    pub has_more_siblings: bool,
+    pub style: Option<Style>,
 }
 
 impl Lineage {
@@ -38,7 +43,10 @@ impl Lineage {
                 false
             };
 
-            lineage.push(has_more_siblings);
+            lineage.push(LineageSegment {
+                has_more_siblings,
+                style: ancestor.as_group().map(|group| group.kind.style()),
+            });
             current = ancestor.parent();
         }
 
@@ -58,16 +66,4 @@ impl Lineage {
         !self.segments.is_empty()
     }
 
-    pub fn indent(&self, style: &TreeWidgetStyle) -> String {
-        self.segments
-            .iter()
-            .map(|&has_more| {
-                if has_more {
-                    style.continuation_symbol
-                } else {
-                    style.empty_symbol
-                }
-            })
-            .collect()
-    }
 }
