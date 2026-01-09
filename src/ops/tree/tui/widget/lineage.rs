@@ -36,17 +36,14 @@ impl Lineage {
 
         while let Some(ancestor_id) = current {
             let ancestor = tree.node(ancestor_id)?;
-            let has_more_siblings = if let Some(grand_id) = ancestor.parent() {
+            if let Some(grand_id) = ancestor.parent() {
                 let grand = tree.node(grand_id)?;
-                grand.children().last().copied() != Some(ancestor_id)
-            } else {
-                false
-            };
-
-            lineage.push(LineageSegment {
-                has_more_siblings,
-                style: ancestor.as_group().map(|group| group.kind.style()),
-            });
+                let has_more_siblings = grand.children().last().copied() != Some(ancestor_id);
+                lineage.push(LineageSegment {
+                    has_more_siblings,
+                    style: ancestor.as_group().map(|group| group.kind.style()),
+                });
+            }
             current = ancestor.parent();
         }
 
@@ -58,11 +55,4 @@ impl Lineage {
         })
     }
 
-    pub fn depth(&self) -> usize {
-        self.segments.len()
-    }
-
-    pub fn has_segments(&self) -> bool {
-        !self.segments.is_empty()
-    }
 }

@@ -25,7 +25,6 @@ pub struct RenderContext<'a> {
     pub tree: &'a DependencyTree,
     pub state: &'a mut TreeWidgetState,
     pub style: &'a TreeWidgetStyle,
-    pub root_label: Option<&'a str>,
     pub block: Option<&'a Block<'a>>,
 }
 
@@ -34,14 +33,12 @@ impl<'a> RenderContext<'a> {
         tree: &'a DependencyTree,
         state: &'a mut TreeWidgetState,
         style: &'a TreeWidgetStyle,
-        root_label: Option<&'a str>,
         block: Option<&'a Block<'a>>,
     ) -> Self {
         Self {
             tree,
             state,
             style,
-            root_label,
             block,
         }
     }
@@ -52,10 +49,8 @@ impl<'a> RenderContext<'a> {
         };
 
         let visible_nodes = self.state.visible_nodes(self.tree).to_vec();
-        let root_line_offset = usize::from(self.root_label.is_some());
-
-        let selected_line = selected_idx + root_line_offset + 1;
-        let total_lines = visible_nodes.len() + root_line_offset;
+        let selected_line = selected_idx + 1;
+        let total_lines = visible_nodes.len();
 
         let viewport = Viewport::new(area, self.block, selected_line, total_lines);
         self.state.update_viewport(viewport);
@@ -71,12 +66,7 @@ impl<'a> RenderContext<'a> {
         }
 
         if viewport.offset == 0 {
-            if let Some(label) = self.root_label {
-                lines.push(Line::from(label.to_string()));
-            }
-
-            let available = viewport.height.saturating_sub(lines.len());
-            let max_nodes = available.min(visible_nodes.len());
+            let max_nodes = viewport.height.min(visible_nodes.len());
 
             for node in visible_nodes.iter().take(max_nodes) {
                 if let Some(line) = self.render_node(node) {
@@ -86,12 +76,10 @@ impl<'a> RenderContext<'a> {
         } else {
             lines.push(self.breadcrumb());
 
-            let total_lines = visible_nodes.len() + root_line_offset;
-
             let start_flat = viewport.offset + 1;
             let end_flat = (viewport.offset + viewport.height).min(total_lines);
             for flat_id in start_flat..end_flat {
-                let node_id = flat_id.saturating_sub(root_line_offset);
+                let node_id = flat_id;
                 if let Some(node) = visible_nodes.get(node_id)
                     && let Some(line) = self.render_node(node)
                 {
@@ -114,12 +102,7 @@ impl<'a> RenderContext<'a> {
         let is_open = self.state.open.contains(&node.id);
 
         let is_root = node_data.parent().is_none();
-        let allow_root_connector = if lineage.depth() <= 1 {
-            self.root_label.is_some()
-        } else {
-            true
-        };
-        let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
+        let show_connector = !is_root;
 
         let mut spans = Vec::new();
 

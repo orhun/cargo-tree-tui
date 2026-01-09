@@ -49,7 +49,7 @@ pub fn render_tree(tree: &DependencyTree) -> String {
     };
 
     let style = TreeWidgetStyle::default();
-    let mut context = RenderContext::new(tree, &mut state, &style, None, None);
+    let mut context = RenderContext::new(tree, &mut state, &style, None);
     let output = context.render(area);
 
     output
