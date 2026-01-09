@@ -167,10 +167,12 @@ impl<'a> RenderContext<'a> {
         match node_data {
             DependencyNode::Crate(dependency) => {
                 spans.push(Span::styled(dependency.name.clone(), name_style));
-                spans.push(Span::styled(
-                    format!(" v{}", dependency.version),
-                    self.style.version_style,
-                ));
+                if !dependency.version.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" v{}", dependency.version),
+                        self.style.version_style,
+                    ));
+                }
 
                 if let Some(extra) = format_suffixes(dependency, self.style) {
                     spans.extend(extra);

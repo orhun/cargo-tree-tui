@@ -4,14 +4,14 @@ use ratatui::{
     widgets::{Block, Paragraph, Scrollbar, StatefulWidget, Widget},
 };
 
-use crate::{core::DependencyTree, ops::tree::tui::widget::render::RenderOutput};
+use crate::core::DependencyTree;
 
 use self::render::{RenderContext, render_scrollbar};
 
-pub use self::{state::TreeWidgetState, style::TreeWidgetStyle};
+pub use self::{render::RenderOutput, state::TreeWidgetState, style::TreeWidgetStyle};
 
 mod lineage;
-mod render;
+pub mod render;
 pub mod state;
 mod style;
 mod viewport;
