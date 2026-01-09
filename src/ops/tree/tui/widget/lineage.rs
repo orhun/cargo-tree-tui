@@ -65,5 +65,4 @@ impl Lineage {
     pub fn has_segments(&self) -> bool {
         !self.segments.is_empty()
     }
-
 }
