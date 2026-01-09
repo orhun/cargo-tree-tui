@@ -7,13 +7,14 @@ use ratatui::{
 };
 
 const KEY_BINDINGS: &str = r#"
- ?   Show this popup 
- ←   Collapse selected
- →   Expand selected
- [   Go to previous sibling
- ]   Go to next sibling
- p   Go to parent
- q   Quit 
+ ?         Show this popup
+ <space>   Toggle selection
+ ←         Collapse selected
+ →         Expand selected
+ [         Go to previous sibling
+ ]         Go to next sibling
+ p         Go to parent
+ q         Quit
 "#;
 
 #[derive(Debug)]
