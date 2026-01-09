@@ -30,9 +30,9 @@ fn render_simple_tree() {
 
     let expected = r#"
 root
-   ├──▾ a
-   │  └──• c
-   └──• b
+├──▾ a
+│  └──• c
+└──• b
 "#;
 
     let tree = build_tree(&nodes);
