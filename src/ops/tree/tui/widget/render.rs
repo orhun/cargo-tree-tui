@@ -5,7 +5,7 @@ use ratatui::{
     widgets::{Block, Scrollbar, StatefulWidget},
 };
 
-use crate::core::{Dependency, DependencyTree};
+use crate::core::{Dependency, DependencyNode, DependencyTree};
 
 use super::{
     lineage::Lineage,
@@ -25,7 +25,6 @@ pub struct RenderContext<'a> {
     pub tree: &'a DependencyTree,
     pub state: &'a mut TreeWidgetState,
     pub style: &'a TreeWidgetStyle,
-    pub root_label: Option<&'a str>,
     pub block: Option<&'a Block<'a>>,
 }
 
@@ -34,14 +33,12 @@ impl<'a> RenderContext<'a> {
         tree: &'a DependencyTree,
         state: &'a mut TreeWidgetState,
         style: &'a TreeWidgetStyle,
-        root_label: Option<&'a str>,
         block: Option<&'a Block<'a>>,
     ) -> Self {
         Self {
             tree,
             state,
             style,
-            root_label,
             block,
         }
     }
@@ -52,10 +49,8 @@ impl<'a> RenderContext<'a> {
         };
 
         let visible_nodes = self.state.visible_nodes(self.tree).to_vec();
-        let root_line_offset = usize::from(self.root_label.is_some());
-
-        let selected_line = selected_idx + root_line_offset + 1;
-        let total_lines = visible_nodes.len() + root_line_offset;
+        let selected_line = selected_idx + 1;
+        let total_lines = visible_nodes.len();
 
         let viewport = Viewport::new(area, self.block, selected_line, total_lines);
         self.state.update_viewport(viewport);
@@ -71,12 +66,7 @@ impl<'a> RenderContext<'a> {
         }
 
         if viewport.offset == 0 {
-            if let Some(label) = self.root_label {
-                lines.push(Line::from(label.to_string()));
-            }
-
-            let available = viewport.height.saturating_sub(lines.len());
-            let max_nodes = available.min(visible_nodes.len());
+            let max_nodes = viewport.height.min(visible_nodes.len());
 
             for node in visible_nodes.iter().take(max_nodes) {
                 if let Some(line) = self.render_node(node) {
@@ -86,12 +76,10 @@ impl<'a> RenderContext<'a> {
         } else {
             lines.push(self.breadcrumb());
 
-            let total_lines = visible_nodes.len() + root_line_offset;
-
             let start_flat = viewport.offset + 1;
             let end_flat = (viewport.offset + viewport.height).min(total_lines);
             for flat_id in start_flat..end_flat {
-                let node_id = flat_id.saturating_sub(root_line_offset);
+                let node_id = flat_id;
                 if let Some(node) = visible_nodes.get(node_id)
                     && let Some(line) = self.render_node(node)
                 {
@@ -110,18 +98,13 @@ impl<'a> RenderContext<'a> {
     pub fn render_node(&self, node: &VisibleNode) -> Option<Line<'a>> {
         let node_data = self.tree.node(node.id)?;
         let lineage = Lineage::build(self.tree, node.id, self.state.selected)?;
-        let has_children = !node_data.children.is_empty();
+        let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.contains(&node.id);
+        let is_group = node_data.is_group();
 
-        let is_root = node_data.parent.is_none();
-        let allow_root_connector = if lineage.depth() <= 1 {
-            self.root_label.is_some()
-        } else {
-            true
-        };
-        let show_connector = !is_root && (allow_root_connector || lineage.has_segments());
+        let is_root = node_data.parent().is_none();
+        let show_connector = !is_root;
 
-        let indent = lineage.indent(self.style);
         let mut spans = Vec::new();
 
         let toggle = if has_children {
@@ -135,15 +118,33 @@ impl<'a> RenderContext<'a> {
         };
 
         if show_connector {
-            let connector = if lineage.is_last {
-                self.style.last_branch_symbol
-            } else {
-                self.style.branch_symbol
-            };
-            spans.push(Span::styled(
-                format!("{indent}{connector}{toggle}"),
-                self.style.style,
-            ));
+            let mut active_group_style = None;
+            for segment in &lineage.segments {
+                if let Some(style) = segment.style {
+                    active_group_style = Some(style);
+                }
+                if segment.is_group {
+                    continue;
+                }
+                let symbol = if segment.has_more_siblings {
+                    self.style.continuation_symbol
+                } else {
+                    self.style.empty_symbol
+                };
+                let segment_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(symbol, segment_style));
+            }
+
+            if !is_group {
+                let connector = if lineage.is_last {
+                    self.style.last_branch_symbol
+                } else {
+                    self.style.branch_symbol
+                };
+                let connector_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(connector, connector_style));
+                spans.push(Span::styled(toggle, self.style.style));
+            }
         }
 
         let name_style = if lineage.is_selected {
@@ -152,38 +153,62 @@ impl<'a> RenderContext<'a> {
             self.style.name_style
         };
 
-        spans.push(Span::styled(node_data.name.clone(), name_style));
-        spans.push(Span::styled(
-            format!(" v{}", node_data.version),
-            self.style.version_style,
-        ));
+        match node_data {
+            DependencyNode::Crate(dependency) => {
+                spans.push(Span::styled(dependency.name.clone(), name_style));
+                if !dependency.version.is_empty() {
+                    spans.push(Span::styled(
+                        format!(" v{}", dependency.version),
+                        self.style.version_style,
+                    ));
+                }
 
-        if let Some(extra) = format_suffixes(node_data, self.style) {
-            spans.extend(extra);
+                if let Some(extra) = format_suffixes(dependency, self.style) {
+                    spans.extend(extra);
+                }
+            }
+            DependencyNode::Group(group) => {
+                let group_style = if lineage.is_selected {
+                    self.style.highlight_style
+                } else {
+                    group.kind.style()
+                };
+                spans.push(Span::styled(group.label().to_string(), group_style));
+            }
         }
 
         Some(Line::from(spans))
     }
 
     pub fn breadcrumb(&self) -> Line<'a> {
-        let mut names = Vec::new();
+        let mut crumbs = Vec::new();
         let mut current = self.state.selected;
 
         while let Some(id) = current {
             if let Some(node) = self.tree.node(id) {
-                names.push(node.name.clone());
-                current = node.parent;
+                let group_style = node.as_group().map(|group| group.kind.style());
+                crumbs.push((
+                    node.display_name().to_string(),
+                    group_style,
+                    node.is_group(),
+                ));
+                current = node.parent();
             } else {
                 break;
             }
         }
-        names.reverse();
+        crumbs.reverse();
 
         let mut spans = Vec::new();
-        for (i, name) in names.iter().enumerate() {
-            let is_last = i + 1 == names.len();
-            let name_style = if is_last {
-                self.style.highlight_style
+        let mut active_group_style = None;
+        for (i, (name, group_style, is_group)) in crumbs.iter().enumerate() {
+            if let Some(style) = *group_style {
+                active_group_style = Some(style);
+            }
+
+            let is_last = i + 1 == crumbs.len();
+            let name_style = if *is_group {
+                group_style.unwrap_or(self.style.style)
             } else {
                 self.style.style
             };
@@ -191,7 +216,8 @@ impl<'a> RenderContext<'a> {
             spans.push(Span::styled(name.clone(), name_style));
 
             if !is_last {
-                spans.push(Span::styled(" → ", self.style.style));
+                let arrow_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(" → ", arrow_style));
             }
         }
 
