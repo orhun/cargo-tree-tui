@@ -16,6 +16,7 @@ pub struct Lineage {
 pub struct LineageSegment {
     pub has_more_siblings: bool,
     pub style: Option<Style>,
+    pub is_group: bool,
 }
 
 impl Lineage {
@@ -24,10 +25,7 @@ impl Lineage {
         let node = tree.node(node_id)?;
 
         let is_last = match node.parent() {
-            Some(parent_id) => {
-                let parent = tree.node(parent_id)?;
-                parent.children().last().copied() == Some(node_id)
-            }
+            Some(parent_id) => !Self::has_more_visible_siblings(tree, parent_id, node_id),
             None => true,
         };
 
@@ -37,11 +35,12 @@ impl Lineage {
         while let Some(ancestor_id) = current {
             let ancestor = tree.node(ancestor_id)?;
             if let Some(grand_id) = ancestor.parent() {
-                let grand = tree.node(grand_id)?;
-                let has_more_siblings = grand.children().last().copied() != Some(ancestor_id);
+                let has_more_siblings =
+                    Self::has_more_visible_siblings(tree, grand_id, ancestor_id);
                 lineage.push(LineageSegment {
                     has_more_siblings,
                     style: ancestor.as_group().map(|group| group.kind.style()),
+                    is_group: ancestor.is_group(),
                 });
             }
             current = ancestor.parent();
@@ -55,4 +54,37 @@ impl Lineage {
         })
     }
 
+    /// Returns true if the given node has any non-group sibling after it.
+    ///
+    /// # Notes
+    ///
+    /// - We use this when deciding `├──` vs `└──` and whether to draw `│` guides.
+    /// - Group headers are labels, so they don't keep the branch guide `│` alive.
+    fn has_more_visible_siblings(
+        tree: &DependencyTree,
+        parent_id: NodeId,
+        node_id: NodeId,
+    ) -> bool {
+        // Missing parent means no siblings to consider.
+        let Some(parent) = tree.node(parent_id) else {
+            return false;
+        };
+
+        for &child in parent.children().iter().rev() {
+            // Stop once we reach the current node.
+            if child == node_id {
+                break;
+            }
+
+            if let Some(node) = tree.node(child) {
+                // Any non-group sibling keeps the branch alive.
+                if !node.is_group() {
+                    return true;
+                }
+            }
+        }
+
+        // Only group siblings (or none) appear after this node.
+        false
+    }
 }

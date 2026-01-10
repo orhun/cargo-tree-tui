@@ -1,12 +1,19 @@
-use cargo_tree_tui::core::{Dependency, DependencyNode, DependencyTree, NodeId};
+use cargo_tree_tui::core::dependency::DependencyType;
+use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 use cargo_tree_tui::ops::tree::tui::widget::render::RenderContext;
 use cargo_tree_tui::ops::tree::tui::widget::{TreeWidgetState, TreeWidgetStyle};
 use ratatui::layout::Rect;
+
+pub enum TestNodeKind {
+    Crate,
+    Group(DependencyType),
+}
 
 pub struct TestNode {
     pub name: &'static str,
     pub parent: Option<usize>,
     pub children: &'static [usize],
+    pub kind: TestNodeKind,
 }
 
 pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
@@ -14,14 +21,22 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     for node in nodes {
         let parent = node.parent.map(NodeId);
         let children = node.children.iter().copied().map(NodeId).collect();
-        arena.push(DependencyNode::Crate(Dependency {
-            name: node.name.to_string(),
-            version: String::new(),
-            manifest_dir: None,
-            is_proc_macro: false,
-            parent,
-            children,
-        }));
+        let node = match node.kind {
+            TestNodeKind::Crate => DependencyNode::Crate(Dependency {
+                name: node.name.to_string(),
+                version: String::new(),
+                manifest_dir: None,
+                is_proc_macro: false,
+                parent,
+                children,
+            }),
+            TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup {
+                kind,
+                parent,
+                children,
+            }),
+        };
+        arena.push(node);
     }
 
     let roots = nodes

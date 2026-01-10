@@ -100,6 +100,7 @@ impl<'a> RenderContext<'a> {
         let lineage = Lineage::build(self.tree, node.id, self.state.selected)?;
         let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.contains(&node.id);
+        let is_group = node_data.is_group();
 
         let is_root = node_data.parent().is_none();
         let show_connector = !is_root;
@@ -119,26 +120,31 @@ impl<'a> RenderContext<'a> {
         if show_connector {
             let mut active_group_style = None;
             for segment in &lineage.segments {
+                if let Some(style) = segment.style {
+                    active_group_style = Some(style);
+                }
+                if segment.is_group {
+                    continue;
+                }
                 let symbol = if segment.has_more_siblings {
                     self.style.continuation_symbol
                 } else {
                     self.style.empty_symbol
                 };
-                if let Some(style) = segment.style {
-                    active_group_style = Some(style);
-                }
                 let segment_style = active_group_style.unwrap_or(self.style.style);
                 spans.push(Span::styled(symbol, segment_style));
             }
 
-            let connector = if lineage.is_last {
-                self.style.last_branch_symbol
-            } else {
-                self.style.branch_symbol
-            };
-            let connector_style = active_group_style.unwrap_or(self.style.style);
-            spans.push(Span::styled(connector, connector_style));
-            spans.push(Span::styled(toggle, self.style.style));
+            if !is_group {
+                let connector = if lineage.is_last {
+                    self.style.last_branch_symbol
+                } else {
+                    self.style.branch_symbol
+                };
+                let connector_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(connector, connector_style));
+                spans.push(Span::styled(toggle, self.style.style));
+            }
         }
 
         let name_style = if lineage.is_selected {
