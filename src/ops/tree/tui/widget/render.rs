@@ -181,24 +181,34 @@ impl<'a> RenderContext<'a> {
     }
 
     pub fn breadcrumb(&self) -> Line<'a> {
-        let mut names = Vec::new();
+        let mut crumbs = Vec::new();
         let mut current = self.state.selected;
 
         while let Some(id) = current {
             if let Some(node) = self.tree.node(id) {
-                names.push(node.display_name().to_string());
+                let group_style = node.as_group().map(|group| group.kind.style());
+                crumbs.push((
+                    node.display_name().to_string(),
+                    group_style,
+                    node.is_group(),
+                ));
                 current = node.parent();
             } else {
                 break;
             }
         }
-        names.reverse();
+        crumbs.reverse();
 
         let mut spans = Vec::new();
-        for (i, name) in names.iter().enumerate() {
-            let is_last = i + 1 == names.len();
-            let name_style = if is_last {
-                self.style.highlight_style
+        let mut active_group_style = None;
+        for (i, (name, group_style, is_group)) in crumbs.iter().enumerate() {
+            if let Some(style) = *group_style {
+                active_group_style = Some(style);
+            }
+
+            let is_last = i + 1 == crumbs.len();
+            let name_style = if *is_group {
+                group_style.unwrap_or(self.style.style)
             } else {
                 self.style.style
             };
@@ -206,7 +216,8 @@ impl<'a> RenderContext<'a> {
             spans.push(Span::styled(name.clone(), name_style));
 
             if !is_last {
-                spans.push(Span::styled(" → ", self.style.style));
+                let arrow_style = active_group_style.unwrap_or(self.style.style);
+                spans.push(Span::styled(" → ", arrow_style));
             }
         }
 
