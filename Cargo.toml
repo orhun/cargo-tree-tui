@@ -17,9 +17,6 @@ clap = { version = "4.5.53", features = ["derive"] }
 clap-cargo = "0.18.3"
 rustc-hash = "2.1.1"
 
-[dev-dependencies]
-divan = "0.1.21"
-
 [[bin]]
 name = "cargo-tree-tui"
 path = "src/bin/cargo/main.rs"
@@ -37,3 +34,4 @@ strip = true # Ensures debug symbols are removed.
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+divan = "0.1.21"
