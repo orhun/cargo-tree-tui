@@ -10,7 +10,7 @@ const KEY_BINDINGS: &str = r#"
  ?       Show this popup
  ←       Collapse selected 
  →       Expand selected
- space   Toggle(expand/collapse) selection 
+ space   Toggle expand/collapse 
  [       Go to previous sibling
  ]       Go to next sibling
  p       Go to parent
