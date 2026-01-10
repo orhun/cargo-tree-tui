@@ -1,3 +1,8 @@
+//! Benchmarks for loading the dependency tree.
+//!
+//!  FIXME:: These benchmarks benchmark a throwaway
+//! type. When the crate is moved into `cargo`,
+//! This will have to be replaced.
 use cargo_tree_tui::core::DependencyTree;
 
 #[divan::bench]
