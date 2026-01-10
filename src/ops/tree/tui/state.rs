@@ -68,6 +68,9 @@ impl TuiState {
             (KeyCode::PageUp, _) => {
                 self.tree_widget_state.page_up(&self.dependency_tree);
             }
+            (KeyCode::Char(' '), _) => {
+                self.tree_widget_state.toggle(&self.dependency_tree);
+            }
             (KeyCode::Right, _) => {
                 self.tree_widget_state.expand(&self.dependency_tree);
             }
