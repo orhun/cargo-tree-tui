@@ -15,7 +15,7 @@ pub struct Lineage {
 #[derive(Debug, Clone, Copy)]
 pub struct LineageSegment {
     pub has_more_siblings: bool,
-    pub style: Option<Style>,
+    pub edge_style: Option<Style>,
     pub is_group: bool,
 }
 
@@ -37,9 +37,12 @@ impl Lineage {
             if let Some(grand_id) = ancestor.parent() {
                 let has_more_siblings =
                     Self::has_more_visible_siblings(tree, grand_id, ancestor_id);
+                let edge_style = tree
+                    .node(grand_id)
+                    .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
                 lineage.push(LineageSegment {
                     has_more_siblings,
-                    style: ancestor.as_group().map(|group| group.kind.style()),
+                    edge_style,
                     is_group: ancestor.is_group(),
                 });
             }

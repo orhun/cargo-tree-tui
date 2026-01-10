@@ -118,11 +118,7 @@ impl<'a> RenderContext<'a> {
         };
 
         if show_connector {
-            let mut active_group_style = None;
             for segment in &lineage.segments {
-                if let Some(style) = segment.style {
-                    active_group_style = Some(style);
-                }
                 if segment.is_group {
                     continue;
                 }
@@ -131,7 +127,7 @@ impl<'a> RenderContext<'a> {
                 } else {
                     self.style.empty_symbol
                 };
-                let segment_style = active_group_style.unwrap_or(self.style.style);
+                let segment_style = segment.edge_style.unwrap_or(self.style.style);
                 spans.push(Span::styled(symbol, segment_style));
             }
 
@@ -141,7 +137,11 @@ impl<'a> RenderContext<'a> {
                 } else {
                     self.style.branch_symbol
                 };
-                let connector_style = active_group_style.unwrap_or(self.style.style);
+                let parent_group_style = node_data
+                    .parent()
+                    .and_then(|parent_id| self.tree.node(parent_id))
+                    .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
+                let connector_style = parent_group_style.unwrap_or(self.style.style);
                 spans.push(Span::styled(connector, connector_style));
                 spans.push(Span::styled(toggle, self.style.style));
             }
@@ -200,12 +200,7 @@ impl<'a> RenderContext<'a> {
         crumbs.reverse();
 
         let mut spans = Vec::new();
-        let mut active_group_style = None;
         for (i, (name, group_style, is_group)) in crumbs.iter().enumerate() {
-            if let Some(style) = *group_style {
-                active_group_style = Some(style);
-            }
-
             let is_last = i + 1 == crumbs.len();
             let name_style = if *is_group {
                 group_style.unwrap_or(self.style.style)
@@ -216,7 +211,11 @@ impl<'a> RenderContext<'a> {
             spans.push(Span::styled(name.clone(), name_style));
 
             if !is_last {
-                let arrow_style = active_group_style.unwrap_or(self.style.style);
+                let arrow_style = if *is_group {
+                    group_style.unwrap_or(self.style.style)
+                } else {
+                    self.style.style
+                };
                 spans.push(Span::styled(" → ", arrow_style));
             }
         }
