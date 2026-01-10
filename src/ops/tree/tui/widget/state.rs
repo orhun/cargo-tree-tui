@@ -97,30 +97,6 @@ impl TreeWidgetState {
         }
     }
 
-    pub fn toggle(&mut self, tree: &DependencyTree) {
-        if !self.ensure_selection(tree) {
-            return;
-        }
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
-        };
-
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
-
-        if node.children().is_empty() {
-            return;
-        }
-
-        if self.open.contains(&selected) {
-            self.collapse(tree);
-        } else {
-            self.expand(tree);
-        }
-    }
-
     /// Expands the selected node or moves into its first child when already expanded.
     pub fn expand(&mut self, tree: &DependencyTree) {
         if !self.ensure_selection(tree) {
