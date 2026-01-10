@@ -4,6 +4,10 @@ description = "Display an interactive tree visualization of a dependency graph"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["binary"]
+binary = []
+
 [dependencies]
 anyhow = "1.0.100"
 cargo_metadata = "0.23.1"
@@ -13,9 +17,17 @@ clap = { version = "4.5.53", features = ["derive"] }
 clap-cargo = "0.18.3"
 rustc-hash = "2.1.1"
 
+[dev-dependencies]
+divan = "0.1.21"
+
 [[bin]]
 name = "cargo-tree-tui"
 path = "src/bin/cargo/main.rs"
+required-features = ["binary"]
+
+[[bench]]
+name = "performance"
+harness = false
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
