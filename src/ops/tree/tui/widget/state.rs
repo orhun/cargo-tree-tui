@@ -98,7 +98,6 @@ impl TreeWidgetState {
     }
 
     /// Expands or collapses (toggles) the selected node.
-    /// Uses `Self::expand` and `Self::collapse` internally.
     pub fn toggle(&mut self, tree: &DependencyTree) {
         if !self.ensure_selection(tree) {
             return;
