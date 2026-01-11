@@ -1,4 +1,5 @@
-use ratatui::style::{Color, Modifier, Style};
+use clap_cargo::style::{GOOD, NOP, PLACEHOLDER, WARN};
+use ratatui::style::{Modifier, Style};
 
 /// Visual configuration for [`TreeWidget`](super::TreeWidget).
 #[derive(Debug)]
@@ -17,19 +18,14 @@ pub struct TreeWidgetStyle {
     pub empty_symbol: &'static str,
 }
 
-/// TODO: Use styles defined in <https://docs.rs/clap-cargo/latest/clap_cargo/style/index.html>
-/// This requires using the `anstyle` feature of Ratatui, which is not released yet.
-/// See <https://github.com/orhun/cargo-tree-tui/issues/9>
 impl Default for TreeWidgetStyle {
     fn default() -> Self {
         Self {
-            highlight_style: Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(Color::Yellow),
-            style: Style::default(),
-            name_style: Style::default(),
-            version_style: Style::default().fg(Color::Green),
-            suffix_style: Style::default().fg(Color::Cyan),
+            highlight_style: Style::from(WARN).add_modifier(Modifier::BOLD),
+            style: NOP.into(),
+            name_style: NOP.into(),
+            version_style: GOOD.into(),
+            suffix_style: PLACEHOLDER.into(),
             node_symbol: '•',
             node_closed_symbol: '▸',
             node_open_symbol: '▾',
