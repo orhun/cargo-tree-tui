@@ -111,7 +111,7 @@ impl TreeWidgetState {
             return;
         };
 
-        if node.children.is_empty() {
+        if node.children().is_empty() {
             return;
         }
 
