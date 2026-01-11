@@ -2,10 +2,11 @@ pub mod help;
 pub mod state;
 pub mod widget;
 
+use clap_cargo::style::{HEADER, USAGE};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation},
 };
@@ -36,8 +37,7 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
 }
 
 pub fn draw_help_text(frame: &mut Frame, area: Rect) {
-    let key_style = Style::default()
-        .fg(Color::Magenta)
+    let key_style = Style::from(HEADER)
         .add_modifier(Modifier::BOLD)
         .add_modifier(Modifier::REVERSED);
 
@@ -48,7 +48,7 @@ pub fn draw_help_text(frame: &mut Frame, area: Rect) {
         Span::styled(" HELP ", key_style),
     ]);
 
-    let paragraph = Paragraph::new(text).style(Style::default().bg(Color::Black).fg(Color::White));
+    let paragraph = Paragraph::new(text).style(Style::from(USAGE));
     frame.render_widget(paragraph, area);
 }
 

@@ -1,7 +1,8 @@
+use clap_cargo::style::{HEADER, NOP, WARN};
 use ratatui::{
     buffer::Buffer,
     layout::{Rect, Size},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Text},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
@@ -27,11 +28,9 @@ pub struct HelpPopupStyle {
 impl Default for HelpPopupStyle {
     fn default() -> Self {
         HelpPopupStyle {
-            border: Style::default().fg(Color::Yellow),
-            title: Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-            default: Style::default(),
+            border: WARN.into(),
+            title: Style::from(HEADER).add_modifier(Modifier::BOLD),
+            default: NOP.into(),
         }
     }
 }

@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
-use ratatui::style::{Color, Style};
+use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
+use ratatui::style::Style;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Key type for uniquely identifying nodes in the dependency tree.
@@ -36,9 +37,9 @@ impl DependencyType {
 
     pub fn style(&self) -> Style {
         match self {
-            Self::Normal => Style::default(),
-            Self::Dev => Style::default().fg(Color::Magenta),
-            Self::Build => Style::default().fg(Color::Blue),
+            Self::Normal => DEP_NORMAL.into(),
+            Self::Dev => DEP_DEV.into(),
+            Self::Build => DEP_BUILD.into(),
         }
     }
 }

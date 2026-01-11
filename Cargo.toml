@@ -4,24 +4,25 @@ description = "Display an interactive tree visualization of a dependency graph"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-anyhow = "1.0.100"
-cargo_metadata = "0.23.1"
-crossterm = "0.29.0"
-ratatui = "0.29.0"
-clap = { version = "4.5.53", features = ["derive"] }
-clap-cargo = "0.18.3"
-rustc-hash = "2.1.1"
-
 [[bin]]
 name = "cargo-tree-tui"
 path = "src/bin/cargo/main.rs"
+
+[dependencies]
+anyhow = "1.0.100"
+cargo_metadata = "0.23.1"
+clap = { version = "4.5.53", features = ["derive"] }
+clap-cargo = "0.18.3"
+crossterm = "0.29.0"
+ratatui = { version = "0.30.0", features = ["layout-cache"] }
+ratatui-core = { version = "0.1.0", features = ["anstyle"] }
+rustc-hash = "2.1.1"
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
 lto = true # Enables Link-time Optimization.
 opt-level = "s" # Prioritizes small binary size. Use `3` if you prefer speed.
 strip = true # Ensures debug symbols are removed.
-
-[dev-dependencies]
-pretty_assertions = "1.4.1"
