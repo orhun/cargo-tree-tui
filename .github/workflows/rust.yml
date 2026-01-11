@@ -1,46 +1,52 @@
-name: CI Workflow
+name: CI
+
 on:
   push:
   pull_request:
 
-env: 
+permissions:
+  contents: read
+
+env:
+  RUST_BACKTRACE: 1
   CARGO_TERM_COLOR: always
+  CLICOLOR: 1
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
 
 jobs:
-  build_and_test:
-    name: Rust project - latest
+  build-and-test:
+    name: Build and Test (${{ matrix.toolchain }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         toolchain:
           - stable
-          - beta
           - nightly
     steps:
-      - uses: actions/checkout@v4
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
       - run: cargo build --verbose
       - run: cargo test --verbose
-  typos-ci:
-    name: Spelling
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      CLICOLOR: 1
-    steps:
-    - name: Checkout Actions Repository
-      uses: actions/checkout@v5
-    - name: Spell Check Repo
-      uses: crate-ci/typos@v1.42.0
+
   fmt-check:
     name: Format Check
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      CLICOLOR: 1
-    steps:  
-      - uses: actions/checkout@v4
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo fmt --check --verbose
+
+  typos:
+    name: Spell check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Spell check
+        uses: crate-ci/typos@master
+        with:
+          config: .github/typos.toml
