@@ -5,7 +5,7 @@ pub mod widget;
 use clap_cargo::style::{HEADER, USAGE};
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation},
@@ -16,10 +16,8 @@ use state::TuiState;
 use widget::TreeWidget;
 
 pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
-    let [tree_area, help_text_area] =
-        Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(frame.area());
-    draw_tree(frame, tree_area, state);
-    draw_help_text(frame, help_text_area);
+    draw_tree(frame, frame.area(), state);
+    draw_help_text(frame, frame.area());
     if state.show_help {
         draw_help_popup(frame);
     }
@@ -48,6 +46,13 @@ pub fn draw_help_text(frame: &mut Frame, area: Rect) {
         Span::styled(" HELP ", key_style),
     ]);
 
+    let area = Rect {
+        x: area.right().saturating_sub(text.width() as u16 + 2),
+        y: area.bottom().saturating_sub(1),
+        width: text.width() as u16,
+        height: 1,
+    };
+
     let paragraph = Paragraph::new(text).style(Style::from(USAGE));
     frame.render_widget(paragraph, area);
 }
@@ -56,8 +61,8 @@ pub fn draw_help_popup(frame: &mut Frame) {
     let help_popup = HelpPopup::default();
     let size = help_popup.size();
     let area = Rect {
-        x: frame.area().right().saturating_sub(size.width + 2),
-        y: frame.area().bottom().saturating_sub(size.height + 2),
+        x: frame.area().right().saturating_sub(size.width + 1),
+        y: frame.area().bottom().saturating_sub(size.height + 1),
         width: size.width,
         height: size.height,
     };

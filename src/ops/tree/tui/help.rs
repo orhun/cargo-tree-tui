@@ -3,20 +3,45 @@ use ratatui::{
     buffer::Buffer,
     layout::{Rect, Size},
     style::{Modifier, Style},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
-const KEY_BINDINGS: &str = r#"
- ?       Show this popup
- ←       Collapse selected 
- →       Expand selected
- space   Toggle expand/collapse 
- [       Go to previous sibling
- ]       Go to next sibling
- p       Go to parent
- q       Quit
-"#;
+const KEY_BINDINGS: &[(&str, &str)] = &[
+    ("?", "Show this popup"),
+    ("←", "Collapse selected"),
+    ("→", "Expand selected"),
+    ("space", "Toggle expand/collapse"),
+    ("[", "Go to previous sibling"),
+    ("]", "Go to next sibling"),
+    ("p", "Go to parent"),
+    ("q", "Quit"),
+];
+
+fn key_bindings() -> Text<'static> {
+    let key_style = Style::from(WARN);
+    let max_key_len = KEY_BINDINGS
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let lines = KEY_BINDINGS
+        .iter()
+        .map(|(key, desc)| {
+            let padding = " ".repeat(max_key_len.saturating_sub(key.chars().count()) + 3);
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled((*key).to_string(), key_style),
+                Span::raw(padding),
+                Span::raw((*desc).to_string()),
+                Span::raw(" "),
+            ])
+        })
+        .collect::<Vec<_>>();
+
+    Text::from(lines)
+}
 
 #[derive(Debug)]
 pub struct HelpPopupStyle {
@@ -28,8 +53,10 @@ pub struct HelpPopupStyle {
 impl Default for HelpPopupStyle {
     fn default() -> Self {
         HelpPopupStyle {
-            border: WARN.into(),
-            title: Style::from(HEADER).add_modifier(Modifier::BOLD),
+            border: HEADER.into(),
+            title: Style::from(HEADER)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::REVERSED),
             default: NOP.into(),
         }
     }
@@ -45,8 +72,8 @@ pub struct HelpPopup<'a> {
 impl Default for HelpPopup<'_> {
     fn default() -> Self {
         HelpPopup {
-            title: Line::from("Commands"),
-            content: Text::from(KEY_BINDINGS.trim_start_matches('\n')),
+            title: Line::from(" COMMANDS "),
+            content: key_bindings(),
             style: HelpPopupStyle::default(),
         }
     }
