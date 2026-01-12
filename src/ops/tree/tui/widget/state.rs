@@ -14,7 +14,7 @@ pub struct TreeWidgetState {
     /// Currently selected node.
     pub selected: Option<NodeId>,
     /// Current viewport.
-    viewport: Viewport,
+    pub viewport: Viewport,
     /// Cached visible nodes.
     visible_cache: Vec<VisibleNode>,
     /// Indicates whether the visible cache is outdated.
