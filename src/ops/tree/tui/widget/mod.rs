@@ -1,15 +1,16 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    widgets::{Block, Paragraph, Scrollbar, StatefulWidget, Widget},
+    widgets::{Block, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget},
 };
 
-use crate::core::DependencyTree;
+use crate::{core::DependencyTree, ops::tree::tui::widget::viewport::Viewport};
 
-use self::render::{RenderContext, render_scrollbar};
+use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
 pub use self::{render::RenderOutput, state::TreeWidgetState, style::TreeWidgetStyle};
 
+mod breadcrumb;
 mod lineage;
 pub mod render;
 pub mod state;
@@ -55,23 +56,57 @@ impl StatefulWidget for TreeWidget<'_> {
         }
 
         let block_ref = self.block.as_ref();
-        let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref);
-
         let RenderOutput {
             lines,
             total_lines,
             viewport,
-        } = ctx.render(area);
+            render_breadcrumb,
+        } = {
+            let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref);
+            ctx.render(area)
+        };
 
-        let mut paragraph = Paragraph::new(lines).style(self.style.style);
         if let Some(block) = block_ref {
-            paragraph = paragraph.block(block.clone());
+            block.clone().render(viewport.area, buf);
         }
 
-        paragraph.render(viewport.area, buf);
+        let mut content_area = viewport.inner;
+        if render_breadcrumb {
+            let breadcrumb_area = Rect {
+                height: 1,
+                ..content_area
+            };
+            Breadcrumb::new(self.tree, state, &self.style).render(breadcrumb_area, buf);
+            content_area.y = content_area.y.saturating_add(1);
+            content_area.height = content_area.height.saturating_sub(1);
+        }
+
+        if content_area.height > 0 {
+            Paragraph::new(lines)
+                .style(self.style.style)
+                .render(content_area, buf);
+        }
 
         if let Some(scrollbar) = self.scrollbar {
             render_scrollbar(scrollbar, &viewport, total_lines, buf);
         }
     }
+}
+
+/// Renders the scrollbar if applicable.
+pub fn render_scrollbar(
+    scrollbar: Scrollbar<'_>,
+    viewport: &Viewport,
+    total_lines: usize,
+    buf: &mut Buffer,
+) {
+    if viewport.height == 0 || viewport.max_offset == 0 {
+        return;
+    }
+
+    let mut scrollbar_state = ScrollbarState::new(total_lines.saturating_sub(viewport.height))
+        .position(viewport.offset)
+        .viewport_content_length(viewport.height);
+
+    scrollbar.render(viewport.inner, buf, &mut scrollbar_state);
 }

@@ -1,8 +1,7 @@
 use ratatui::{
-    buffer::Buffer,
     layout::Rect,
     text::{Line, Span},
-    widgets::{Block, Scrollbar, StatefulWidget},
+    widgets::Block,
 };
 
 use crate::core::{Dependency, DependencyNode, DependencyTree};
@@ -19,19 +18,30 @@ pub struct RenderOutput<'a> {
     pub lines: Vec<Line<'a>>,
     pub total_lines: usize,
     pub viewport: Viewport,
+    pub render_breadcrumb: bool,
 }
 
-pub struct RenderContext<'a> {
+/// Context for rendering the dependency tree.
+///
+/// # Note for lifetimes
+///
+/// - `'a` is the lifetime of the dependency tree and style references.
+/// - `'s` is the lifetime of the mutable state reference.
+///
+/// The reason why we keep them separate is to let the mutable borrow of the
+/// state end before we later borrow the state immutably (e.g. for breadcrumb
+/// rendering) while still holding references to the tree and style.
+pub struct RenderContext<'a, 's> {
     pub tree: &'a DependencyTree,
-    pub state: &'a mut TreeWidgetState,
+    pub state: &'s mut TreeWidgetState,
     pub style: &'a TreeWidgetStyle,
     pub block: Option<&'a Block<'a>>,
 }
 
-impl<'a> RenderContext<'a> {
+impl<'a, 's> RenderContext<'a, 's> {
     pub fn new(
         tree: &'a DependencyTree,
-        state: &'a mut TreeWidgetState,
+        state: &'s mut TreeWidgetState,
         style: &'a TreeWidgetStyle,
         block: Option<&'a Block<'a>>,
     ) -> Self {
@@ -55,36 +65,25 @@ impl<'a> RenderContext<'a> {
         let viewport = Viewport::new(area, self.block, selected_line, total_lines);
         self.state.update_viewport(viewport);
 
-        let mut lines = Vec::with_capacity(viewport.height);
-
-        if viewport.height == 0 {
-            return RenderOutput {
-                lines,
-                total_lines,
-                viewport: Viewport::default(),
-            };
-        }
-
-        if viewport.offset == 0 {
-            let max_nodes = viewport.height.min(visible_nodes.len());
-
-            for node in visible_nodes.iter().take(max_nodes) {
-                if let Some(line) = self.render_node(node) {
-                    lines.push(line);
-                }
-            }
+        let render_breadcrumb = viewport.offset > 0;
+        let content_height = if render_breadcrumb {
+            viewport.height.saturating_sub(1)
         } else {
-            lines.push(self.breadcrumb());
+            viewport.height
+        };
+        let mut lines = Vec::with_capacity(content_height);
 
-            let start_flat = viewport.offset + 1;
-            let end_flat = (viewport.offset + viewport.height).min(total_lines);
-            for flat_id in start_flat..end_flat {
-                let node_id = flat_id;
-                if let Some(node) = visible_nodes.get(node_id)
-                    && let Some(line) = self.render_node(node)
-                {
-                    lines.push(line);
-                }
+        let start_flat = if render_breadcrumb {
+            viewport.offset + 1
+        } else {
+            viewport.offset
+        };
+        let end_flat = (start_flat + content_height).min(total_lines);
+        for flat_id in start_flat..end_flat {
+            if let Some(node) = visible_nodes.get(flat_id)
+                && let Some(line) = self.render_node(node)
+            {
+                lines.push(line);
             }
         }
 
@@ -92,6 +91,7 @@ impl<'a> RenderContext<'a> {
             lines,
             total_lines,
             viewport,
+            render_breadcrumb,
         }
     }
 
@@ -179,68 +179,6 @@ impl<'a> RenderContext<'a> {
 
         Some(Line::from(spans))
     }
-
-    pub fn breadcrumb(&self) -> Line<'a> {
-        let mut crumbs = Vec::new();
-        let mut current = self.state.selected;
-
-        while let Some(id) = current {
-            if let Some(node) = self.tree.node(id) {
-                let group_style = node.as_group().map(|group| group.kind.style());
-                crumbs.push((
-                    node.display_name().to_string(),
-                    group_style,
-                    node.is_group(),
-                ));
-                current = node.parent();
-            } else {
-                break;
-            }
-        }
-        crumbs.reverse();
-
-        let mut spans = Vec::new();
-        for (i, (name, group_style, is_group)) in crumbs.iter().enumerate() {
-            let is_last = i + 1 == crumbs.len();
-            let name_style = if *is_group {
-                group_style.unwrap_or(self.style.style)
-            } else {
-                self.style.style
-            };
-
-            spans.push(Span::styled(name.clone(), name_style));
-
-            if !is_last {
-                let arrow_style = if *is_group {
-                    group_style.unwrap_or(self.style.style)
-                } else {
-                    self.style.style
-                };
-                spans.push(Span::styled(" → ", arrow_style));
-            }
-        }
-
-        Line::from(spans)
-    }
-}
-
-/// Renders the scrollbar if applicable.
-pub fn render_scrollbar(
-    scrollbar: Scrollbar<'_>,
-    viewport: &Viewport,
-    total_lines: usize,
-    buf: &mut Buffer,
-) {
-    if viewport.height == 0 || viewport.max_offset == 0 {
-        return;
-    }
-
-    let mut scrollbar_state =
-        ratatui::widgets::ScrollbarState::new(total_lines.saturating_sub(viewport.height))
-            .position(viewport.offset)
-            .viewport_content_length(viewport.height);
-
-    scrollbar.render(viewport.inner, buf, &mut scrollbar_state);
 }
 
 /// Formats suffixes for a dependency node.
