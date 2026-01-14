@@ -123,13 +123,27 @@ impl Widget for Breadcrumb<'_> {
 
         for (i, crumb) in display_crumbs.iter().enumerate() {
             let is_last = i + 1 == display_crumbs.len();
-            let style = if crumb.is_group {
+            let is_next_group = display_crumbs.get(i + 1).is_some_and(|next| next.is_group);
+            let is_group = crumb.is_group;
+
+            let style = if is_next_group || is_group {
                 crumb.group_style.unwrap_or(self.style.style)
             } else {
                 self.style.style
             };
-            spans.push(Span::styled(crumb.name.clone(), style));
-            if !is_last {
+
+            if !is_group {
+                spans.push(Span::styled(
+                    crumb.name.clone(),
+                    if is_last {
+                        self.style.highlight_style
+                    } else {
+                        self.style.style
+                    },
+                ));
+            }
+
+            if !is_last && !is_next_group {
                 spans.push(Span::styled(format!(" {CONNECTOR_SYMBOL} "), style));
             }
         }
