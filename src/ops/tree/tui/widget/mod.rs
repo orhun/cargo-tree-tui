@@ -71,20 +71,25 @@ impl StatefulWidget for TreeWidget<'_> {
         }
 
         let mut content_area = viewport.inner;
-        if render_breadcrumb {
-            let breadcrumb_area = Rect {
+        let breadcrumb_area = if render_breadcrumb && content_area.height > 0 {
+            content_area.height = content_area.height.saturating_sub(1);
+            Some(Rect {
+                y: content_area.y.saturating_add(content_area.height),
                 height: 1,
                 ..content_area
-            };
-            Breadcrumb::new(self.tree, state, &self.style).render(breadcrumb_area, buf);
-            content_area.y = content_area.y.saturating_add(1);
-            content_area.height = content_area.height.saturating_sub(1);
-        }
+            })
+        } else {
+            None
+        };
 
         if content_area.height > 0 {
             Paragraph::new(lines)
                 .style(self.style.style)
                 .render(content_area, buf);
+        }
+
+        if let Some(area) = breadcrumb_area {
+            Breadcrumb::new(self.tree, state, &self.style).render(area, buf);
         }
 
         if let Some(scrollbar) = self.scrollbar {

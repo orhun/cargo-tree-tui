@@ -316,15 +316,32 @@ fn breadcrumb_when_scrolled() {
     let area = Rect {
         x: 0,
         y: 0,
+        width: 100,
+        height: 4,
+    };
+
+    let expected = r#"
+            └──▾ e
+               └──▾ f
+                  └──• g
+root → a → b → c → d → e → f → g
+"#;
+
+    let output = render_tree_widget(&tree, &mut state, area);
+    assert_eq!(expected.trim(), output.trim());
+
+    let area = Rect {
+        x: 0,
+        y: 0,
         width: 40,
         height: 4,
     };
 
     let expected = r#"
-root → a → b → c → d → e → f → g
             └──▾ e
                └──▾ f
                   └──• g
+root → a → b → … → g
 "#;
 
     let output = render_tree_widget(&tree, &mut state, area);
