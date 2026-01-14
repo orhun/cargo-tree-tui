@@ -1,8 +1,11 @@
 mod common;
 
+use cargo_tree_tui::core::NodeId;
 use cargo_tree_tui::core::dependency::DependencyType;
-use common::{TestNode, TestNodeKind, build_tree, render_tree};
+use cargo_tree_tui::ops::tree::tui::widget::TreeWidgetState;
+use common::{TestNode, TestNodeKind, build_tree, render_tree_context, render_tree_widget};
 use pretty_assertions::assert_eq;
+use ratatui::layout::Rect;
 
 #[test]
 fn basic() {
@@ -41,7 +44,7 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    let tree_str = render_tree(&tree);
+    let tree_str = render_tree_context(&tree);
     assert_eq!(expected.trim(), tree_str.trim());
 }
 
@@ -75,7 +78,7 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    assert_eq!(expected.trim(), render_tree(&tree).trim());
+    assert_eq!(expected.trim(), render_tree_context(&tree).trim());
 }
 
 #[test]
@@ -115,7 +118,7 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    assert_eq!(expected.trim(), render_tree(&tree).trim());
+    assert_eq!(expected.trim(), render_tree_context(&tree).trim());
 }
 
 #[test]
@@ -155,7 +158,7 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    assert_eq!(expected.trim(), render_tree(&tree).trim());
+    assert_eq!(expected.trim(), render_tree_context(&tree).trim());
 }
 
 #[test]
@@ -202,7 +205,7 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    assert_eq!(expected.trim(), render_tree(&tree).trim());
+    assert_eq!(expected.trim(), render_tree_context(&tree).trim());
 }
 
 #[test]
@@ -249,5 +252,81 @@ root
 "#;
 
     let tree = build_tree(&nodes);
-    assert_eq!(expected.trim(), render_tree(&tree).trim());
+    assert_eq!(expected.trim(), render_tree_context(&tree).trim());
+}
+
+#[test]
+fn breadcrumb_when_scrolled() {
+    let nodes = [
+        TestNode {
+            name: "root",
+            parent: None,
+            children: &[1],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "a",
+            parent: Some(0),
+            children: &[2],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "b",
+            parent: Some(1),
+            children: &[3],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "c",
+            parent: Some(2),
+            children: &[4],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "d",
+            parent: Some(3),
+            children: &[5],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "e",
+            parent: Some(4),
+            children: &[6],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "f",
+            parent: Some(5),
+            children: &[7],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "g",
+            parent: Some(6),
+            children: &[],
+            kind: TestNodeKind::Crate,
+        },
+    ];
+
+    let tree = build_tree(&nodes);
+    let mut state = TreeWidgetState::default();
+    state.expand_all(&tree);
+    state.selected = Some(NodeId(7));
+
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 4,
+    };
+
+    let expected = r#"
+root → a → b → c → d → e → f → g
+            └──▾ e
+               └──▾ f
+                  └──• g
+"#;
+
+    let output = render_tree_widget(&tree, &mut state, area);
+    assert_eq!(expected.trim(), output.trim());
 }

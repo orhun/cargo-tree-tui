@@ -1,8 +1,11 @@
 use cargo_tree_tui::core::dependency::DependencyType;
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 use cargo_tree_tui::ops::tree::tui::widget::render::RenderContext;
-use cargo_tree_tui::ops::tree::tui::widget::{TreeWidgetState, TreeWidgetStyle};
+use cargo_tree_tui::ops::tree::tui::widget::{TreeWidget, TreeWidgetState, TreeWidgetStyle};
+use ratatui::Terminal;
+use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
+use ratatui::widgets::StatefulWidget;
 
 pub enum TestNodeKind {
     Crate,
@@ -52,7 +55,7 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     }
 }
 
-pub fn render_tree(tree: &DependencyTree) -> String {
+pub fn render_tree_context(tree: &DependencyTree) -> String {
     let mut state = TreeWidgetState::default();
     state.expand_all(tree);
 
@@ -72,5 +75,26 @@ pub fn render_tree(tree: &DependencyTree) -> String {
         .iter()
         .map(|line| line.to_string())
         .collect::<Vec<String>>()
+        .join("\n")
+}
+
+pub fn render_tree_widget(
+    tree: &DependencyTree,
+    state: &mut TreeWidgetState,
+    area: Rect,
+) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+    terminal
+        .draw(|frame| {
+            let frame_area = frame.area();
+            TreeWidget::new(tree).render(frame_area, frame.buffer_mut(), state);
+        })
+        .unwrap();
+    terminal
+        .backend()
+        .to_string()
+        .lines()
+        .map(|s| s.trim_start_matches('"').trim_end_matches('"').trim_end())
+        .collect::<Vec<&str>>()
         .join("\n")
 }
