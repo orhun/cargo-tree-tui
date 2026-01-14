@@ -117,7 +117,7 @@ impl Widget for Breadcrumb<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let crumbs = self.collect_crumbs();
 
-        let max_width = area.width.saturating_sub(1) as usize;
+        let max_width = area.width.saturating_sub(20) as usize;
         let display_crumbs = Self::elide_crumbs(crumbs, max_width);
         let mut spans = Vec::new();
 
