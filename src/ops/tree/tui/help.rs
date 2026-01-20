@@ -1,4 +1,4 @@
-use clap_cargo::style::{HEADER, NOP, WARN};
+use clap_cargo::style::{HEADER, NOP, VALID};
 use ratatui::{
     buffer::Buffer,
     layout::{Rect, Size},
@@ -19,7 +19,7 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
 ];
 
 fn key_bindings() -> Text<'static> {
-    let key_style = Style::from(WARN);
+    let key_style = Style::from(VALID);
     let max_key_len = KEY_BINDINGS
         .iter()
         .map(|(key, _)| key.chars().count())
