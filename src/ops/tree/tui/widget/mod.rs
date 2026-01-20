@@ -61,7 +61,6 @@ impl StatefulWidget for TreeWidget<'_> {
             context_lines,
             total_lines,
             viewport,
-            render_breadcrumb,
         } = {
             let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref);
             ctx.render(area)
@@ -86,7 +85,7 @@ impl StatefulWidget for TreeWidget<'_> {
             None
         };
 
-        let breadcrumb_area = if render_breadcrumb && content_area.height > 0 {
+        let breadcrumb_area = if content_area.height > 0 {
             content_area.height = content_area.height.saturating_sub(1);
             Some(Rect {
                 y: content_area.y.saturating_add(content_area.height),
