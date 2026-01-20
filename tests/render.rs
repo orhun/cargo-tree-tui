@@ -317,13 +317,14 @@ fn breadcrumb_when_scrolled() {
         x: 0,
         y: 0,
         width: 100,
-        height: 4,
+        height: 5,
     };
 
     let expected = r#"
+root
+└──▾ a
+         └──▾ d
             └──▾ e
-               └──▾ f
-                  └──• g
 root → a → b → c → d → e → f → g
 "#;
 
@@ -334,14 +335,80 @@ root → a → b → c → d → e → f → g
         x: 0,
         y: 0,
         width: 40,
-        height: 4,
+        height: 5,
     };
 
     let expected = r#"
+root
+└──▾ a
+         └──▾ d
             └──▾ e
-               └──▾ f
-                  └──• g
 root → a → b → … → g
+"#;
+
+    let output = render_tree_widget(&tree, &mut state, area);
+    assert_eq!(expected.trim(), output.trim());
+}
+
+#[test]
+fn context_bar_when_scrolled() {
+    let nodes = [
+        TestNode {
+            name: "root",
+            parent: None,
+            children: &[1],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "a",
+            parent: Some(0),
+            children: &[2],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "b",
+            parent: Some(1),
+            children: &[3],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "c",
+            parent: Some(2),
+            children: &[4],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "d",
+            parent: Some(3),
+            children: &[5],
+            kind: TestNodeKind::Crate,
+        },
+        TestNode {
+            name: "e",
+            parent: Some(4),
+            children: &[],
+            kind: TestNodeKind::Crate,
+        },
+    ];
+
+    let tree = build_tree(&nodes);
+    let mut state = TreeWidgetState::default();
+    state.expand_all(&tree);
+    state.selected = Some(NodeId(5));
+
+    let area = Rect {
+        x: 0,
+        y: 0,
+        width: 40,
+        height: 5,
+    };
+
+    let expected = r#"
+root
+   └──▾ b
+      └──▾ c
+         └──▾ d
+root → a → b → … → e
 "#;
 
     let output = render_tree_widget(&tree, &mut state, area);

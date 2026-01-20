@@ -1,10 +1,11 @@
 use ratatui::{
     layout::Rect,
+    style::{Modifier, Stylize},
     text::{Line, Span},
     widgets::Block,
 };
 
-use crate::core::{Dependency, DependencyNode, DependencyTree};
+use crate::core::{Dependency, DependencyNode, DependencyTree, NodeId};
 
 use super::{
     lineage::Lineage,
@@ -16,6 +17,7 @@ use super::{
 #[derive(Default)]
 pub struct RenderOutput<'a> {
     pub lines: Vec<Line<'a>>,
+    pub context_lines: Vec<Line<'a>>,
     pub total_lines: usize,
     pub viewport: Viewport,
     pub render_breadcrumb: bool,
@@ -71,35 +73,37 @@ impl<'a, 's> RenderContext<'a, 's> {
         } else {
             viewport.height
         };
-        let mut lines = Vec::with_capacity(content_height);
-
         let start_flat = if render_breadcrumb {
             viewport.offset + 1
         } else {
             viewport.offset
         };
+        let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
             if let Some(node) = visible_nodes.get(flat_id)
-                && let Some(line) = self.render_node(node)
+                && let Some(line) = self.render_node(node.id)
             {
                 lines.push(line);
             }
         }
 
+        let context_lines = self.render_context_lines(&visible_nodes, start_flat);
+
         RenderOutput {
             lines,
+            context_lines,
             total_lines,
             viewport,
             render_breadcrumb,
         }
     }
 
-    pub fn render_node(&self, node: &VisibleNode) -> Option<Line<'a>> {
-        let node_data = self.tree.node(node.id)?;
-        let lineage = Lineage::build(self.tree, node.id, self.state.selected)?;
+    pub fn render_node(&self, node_id: NodeId) -> Option<Line<'a>> {
+        let node_data = self.tree.node(node_id)?;
+        let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
         let has_children = !node_data.children().is_empty();
-        let is_open = self.state.open.contains(&node.id);
+        let is_open = self.state.open.contains(&node_id);
         let is_group = node_data.is_group();
 
         let is_root = node_data.parent().is_none();
@@ -178,6 +182,46 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
 
         Some(Line::from(spans))
+    }
+
+    fn render_context_lines(
+        &self,
+        visible_nodes: &[VisibleNode],
+        start_flat: usize,
+    ) -> Vec<Line<'a>> {
+        if start_flat == 0 {
+            return Vec::new();
+        }
+
+        let Some(first_visible) = visible_nodes.get(start_flat) else {
+            return Vec::new();
+        };
+
+        // Increase sticky context as we go deeper in the tree.
+        // Using depth / 2 keeps the context informative without overwhelming the view.
+        // (context grows, but slower than tree depth).
+        let max_lines = first_visible.depth / 2;
+        if max_lines == 0 {
+            return Vec::new();
+        }
+
+        // Collect ancestors bottom → top
+        let mut ancestors = Vec::new();
+        let mut current = self.tree.node(first_visible.id).and_then(|n| n.parent());
+
+        while let Some(id) = current {
+            ancestors.push(id);
+            current = self.tree.node(id).and_then(|n| n.parent());
+        }
+
+        // Render top → bottom, limited
+        ancestors
+            .into_iter()
+            .rev()
+            .take(max_lines)
+            .filter_map(|id| self.render_node(id))
+            .map(|line| line.add_modifier(Modifier::DIM))
+            .collect()
     }
 }
 
