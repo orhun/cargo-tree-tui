@@ -20,7 +20,6 @@ pub struct RenderOutput<'a> {
     pub context_lines: Vec<Line<'a>>,
     pub total_lines: usize,
     pub viewport: Viewport,
-    pub render_breadcrumb: bool,
 }
 
 /// Context for rendering the dependency tree.
@@ -64,20 +63,25 @@ impl<'a, 's> RenderContext<'a, 's> {
         let selected_line = selected_idx + 1;
         let total_lines = visible_nodes.len();
 
-        let viewport = Viewport::new(area, self.block, selected_line, total_lines);
+        let mut viewport = Viewport::new(area, self.block, selected_line, total_lines);
+        if viewport.height > 0 {
+            viewport.height = viewport.height.saturating_sub(1);
+            if viewport.height == 0 {
+                viewport.offset = 0;
+                viewport.max_offset = 0;
+            } else {
+                let center_line = viewport.height.div_ceil(2);
+                let mut offset = selected_line.saturating_sub(center_line);
+                let max_offset = total_lines.saturating_sub(viewport.height);
+                offset = offset.min(max_offset);
+                viewport.offset = offset;
+                viewport.max_offset = max_offset;
+            }
+        }
         self.state.update_viewport(viewport);
 
-        let render_breadcrumb = viewport.offset > 0;
-        let content_height = if render_breadcrumb {
-            viewport.height.saturating_sub(1)
-        } else {
-            viewport.height
-        };
-        let start_flat = if render_breadcrumb {
-            viewport.offset + 1
-        } else {
-            viewport.offset
-        };
+        let content_height = viewport.height;
+        let start_flat = viewport.offset;
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
@@ -95,7 +99,6 @@ impl<'a, 's> RenderContext<'a, 's> {
             context_lines,
             total_lines,
             viewport,
-            render_breadcrumb,
         }
     }
 
