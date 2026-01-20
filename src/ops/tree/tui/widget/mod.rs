@@ -58,6 +58,7 @@ impl StatefulWidget for TreeWidget<'_> {
         let block_ref = self.block.as_ref();
         let RenderOutput {
             lines,
+            context_lines,
             total_lines,
             viewport,
             render_breadcrumb,
@@ -71,6 +72,20 @@ impl StatefulWidget for TreeWidget<'_> {
         }
 
         let mut content_area = viewport.inner;
+        let context_lines_len = context_lines.len() as u16;
+        let context_area = if viewport.offset > 0 && content_area.height > context_lines_len {
+            let area = Rect {
+                y: content_area.y,
+                height: context_lines_len,
+                ..content_area
+            };
+            content_area.y = content_area.y.saturating_add(context_lines_len);
+            content_area.height = content_area.height.saturating_sub(context_lines_len);
+            Some(area)
+        } else {
+            None
+        };
+
         let breadcrumb_area = if render_breadcrumb && content_area.height > 0 {
             content_area.height = content_area.height.saturating_sub(1);
             Some(Rect {
@@ -81,6 +96,12 @@ impl StatefulWidget for TreeWidget<'_> {
         } else {
             None
         };
+
+        if let Some(area) = context_area {
+            Paragraph::new(context_lines)
+                .style(self.style.style)
+                .render(area, buf);
+        }
 
         if content_area.height > 0 {
             Paragraph::new(lines)
