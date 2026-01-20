@@ -1,4 +1,4 @@
-use clap_cargo::style::{GOOD, NOP, PLACEHOLDER, WARN};
+use clap_cargo::style::{DEP_BUILD, NOP, PLACEHOLDER, WARN};
 use ratatui::style::{Modifier, Style};
 
 /// Visual configuration for [`TreeWidget`](super::TreeWidget).
@@ -25,8 +25,8 @@ impl Default for TreeWidgetStyle {
             highlight_style: Style::from(WARN).add_modifier(Modifier::BOLD),
             style: NOP.into(),
             name_style: NOP.into(),
-            version_style: GOOD.into(),
-            suffix_style: PLACEHOLDER.into(),
+            version_style: PLACEHOLDER.into(),
+            suffix_style: DEP_BUILD.into(),
             node_symbol: '•',
             node_closed_symbol: '▸',
             node_open_symbol: '▾',
