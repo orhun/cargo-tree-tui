@@ -80,8 +80,9 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
         self.state.update_viewport(viewport);
 
+        let context_lines = self.render_context_lines(&visible_nodes, viewport.offset);
         let content_height = viewport.height;
-        let start_flat = viewport.offset;
+        let start_flat = viewport.offset + context_lines.len();
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
@@ -91,8 +92,6 @@ impl<'a, 's> RenderContext<'a, 's> {
                 lines.push(line);
             }
         }
-
-        let context_lines = self.render_context_lines(&visible_nodes, start_flat);
 
         RenderOutput {
             lines,
