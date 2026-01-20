@@ -86,8 +86,9 @@ impl<'a, 's> RenderContext<'a, 's> {
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
+            let is_last_rendered = flat_id + context_lines.len() == end_flat - 1;
             if let Some(node) = visible_nodes.get(flat_id)
-                && let Some(line) = self.render_node(node.id)
+                && let Some(line) = self.render_node(node.id, is_last_rendered)
             {
                 lines.push(line);
             }
@@ -101,7 +102,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
     }
 
-    pub fn render_node(&self, node_id: NodeId) -> Option<Line<'a>> {
+    pub fn render_node(&self, node_id: NodeId, show_more_below: bool) -> Option<Line<'a>> {
         let node_data = self.tree.node(node_id)?;
         let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
         let has_children = !node_data.children().is_empty();
@@ -128,12 +129,18 @@ impl<'a, 's> RenderContext<'a, 's> {
                 if segment.is_group {
                     continue;
                 }
+
+                let mut segment_style = segment.edge_style.unwrap_or(self.style.style);
                 let symbol = if segment.has_more_siblings {
-                    self.style.continuation_symbol
+                    if show_more_below {
+                        segment_style = segment_style.add_modifier(Modifier::DIM);
+                        self.style.more_below_symbol
+                    } else {
+                        self.style.continuation_symbol
+                    }
                 } else {
                     self.style.empty_symbol
                 };
-                let segment_style = segment.edge_style.unwrap_or(self.style.style);
                 spans.push(Span::styled(symbol, segment_style));
             }
 
@@ -221,7 +228,7 @@ impl<'a, 's> RenderContext<'a, 's> {
             .into_iter()
             .rev()
             .take(max_lines)
-            .filter_map(|id| self.render_node(id))
+            .filter_map(|id| self.render_node(id, false))
             .map(|line| line.add_modifier(Modifier::DIM))
             .collect()
     }
