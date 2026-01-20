@@ -15,6 +15,7 @@ pub struct TreeWidgetStyle {
     pub branch_symbol: &'static str,
     pub last_branch_symbol: &'static str,
     pub continuation_symbol: &'static str,
+    pub more_below_symbol: &'static str,
     pub empty_symbol: &'static str,
 }
 
@@ -32,6 +33,7 @@ impl Default for TreeWidgetStyle {
             branch_symbol: "├──",
             last_branch_symbol: "└──",
             continuation_symbol: "│  ",
+            more_below_symbol: "│↓ ",
             empty_symbol: "   ",
         }
     }

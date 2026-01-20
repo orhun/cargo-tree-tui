@@ -48,5 +48,4 @@ impl Viewport {
             max_offset,
         }
     }
-
 }
