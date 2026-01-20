@@ -323,8 +323,8 @@ fn breadcrumb_when_scrolled() {
     let expected = r#"
 root
 └──▾ a
-         └──▾ d
-            └──▾ e
+               └──▾ f
+                  └──• g
 root → a → b → c → d → e → f → g
 "#;
 
@@ -341,8 +341,8 @@ root → a → b → c → d → e → f → g
     let expected = r#"
 root
 └──▾ a
-         └──▾ d
-            └──▾ e
+               └──▾ f
+                  └──• g
 root → a → b → … → g
 "#;
 
@@ -405,9 +405,9 @@ fn context_bar_when_scrolled() {
 
     let expected = r#"
 root
-   └──▾ b
       └──▾ c
          └──▾ d
+            └──• e
 root → a → b → … → e
 "#;
 
