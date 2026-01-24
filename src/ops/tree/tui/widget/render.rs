@@ -81,14 +81,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         self.state.update_viewport(viewport);
 
         let context_lines = self.render_context_lines(&visible_nodes, viewport.offset);
-        let content_height = viewport.height;
-        let start_flat = viewport.offset + context_lines.len();
+        let content_height = viewport.height.saturating_sub(context_lines.len());
+        let start_flat = viewport.offset;
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
-            let is_last_rendered = flat_id + context_lines.len() == end_flat - 1;
+            let is_last_rendered = flat_id + 1 == end_flat;
             if let Some(node) = visible_nodes.get(flat_id)
-                && let Some(line) = self.render_node(node.id, is_last_rendered)
+                && let Some(line) = self.render_node(node.id, is_last_rendered, false)
             {
                 lines.push(line);
             }
@@ -102,7 +102,12 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
     }
 
-    pub fn render_node(&self, node_id: NodeId, show_more_below: bool) -> Option<Line<'a>> {
+    pub fn render_node(
+        &self,
+        node_id: NodeId,
+        show_more_below: bool,
+        context_lines: bool,
+    ) -> Option<Line<'a>> {
         let node_data = self.tree.node(node_id)?;
         let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
         let has_children = !node_data.children().is_empty();
@@ -130,18 +135,22 @@ impl<'a, 's> RenderContext<'a, 's> {
                     continue;
                 }
 
-                let mut segment_style = segment.edge_style.unwrap_or(self.style.style);
-                let symbol = if segment.has_more_siblings {
-                    if show_more_below {
-                        segment_style = segment_style.add_modifier(Modifier::DIM);
-                        self.style.more_below_symbol
-                    } else {
-                        self.style.continuation_symbol
-                    }
+                let base_style = if context_lines {
+                    Modifier::DIM.into()
                 } else {
-                    self.style.empty_symbol
+                    segment.edge_style.unwrap_or(self.style.style)
                 };
-                spans.push(Span::styled(symbol, segment_style));
+
+                let (symbol, style) = match (segment.has_more_siblings, show_more_below) {
+                    (true, true) => (
+                        self.style.more_below_symbol,
+                        base_style.add_modifier(Modifier::DIM),
+                    ),
+                    (true, false) => (self.style.continuation_symbol, base_style),
+                    (false, _) => (self.style.empty_symbol, base_style),
+                };
+
+                spans.push(Span::styled(symbol, style));
             }
 
             if !is_group {
@@ -193,26 +202,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         Some(Line::from(spans))
     }
 
-    fn render_context_lines(
-        &self,
-        visible_nodes: &[VisibleNode],
-        start_flat: usize,
-    ) -> Vec<Line<'a>> {
-        if start_flat == 0 {
+    fn render_context_lines(&self, visible_nodes: &[VisibleNode], offset: usize) -> Vec<Line<'a>> {
+        if offset == 0 {
             return Vec::new();
         }
 
-        let Some(first_visible) = visible_nodes.get(start_flat) else {
+        let Some(first_visible) = visible_nodes.get(offset) else {
             return Vec::new();
         };
-
-        // Increase sticky context as we go deeper in the tree.
-        // Using depth / 2 keeps the context informative without overwhelming the view.
-        // (context grows, but slower than tree depth).
-        let max_lines = first_visible.depth / 2;
-        if max_lines == 0 {
-            return Vec::new();
-        }
 
         // Collect ancestors bottom → top
         let mut ancestors = Vec::new();
@@ -227,8 +224,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         ancestors
             .into_iter()
             .rev()
-            .take(max_lines)
-            .filter_map(|id| self.render_node(id, false))
+            .filter_map(|id| self.render_node(id, false, true))
             .map(|line| line.add_modifier(Modifier::DIM))
             .collect()
     }
