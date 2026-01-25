@@ -55,10 +55,10 @@ impl TuiState {
                 self.tree_widget_state
                     .select_previous_sibling(&self.dependency_tree);
             }
-            (KeyCode::Down, _) => {
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
                 self.tree_widget_state.select_next(&self.dependency_tree);
             }
-            (KeyCode::Up, _) => {
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
                 self.tree_widget_state
                     .select_previous(&self.dependency_tree);
             }
