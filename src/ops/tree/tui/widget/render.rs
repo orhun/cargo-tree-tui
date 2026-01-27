@@ -63,25 +63,17 @@ impl<'a, 's> RenderContext<'a, 's> {
         let selected_line = selected_idx + 1;
         let total_lines = visible_nodes.len();
 
-        let mut viewport = Viewport::new(area, self.block, selected_line, total_lines);
-        if viewport.height > 0 {
-            viewport.height = viewport.height.saturating_sub(1);
-            if viewport.height == 0 {
-                viewport.offset = 0;
-                viewport.max_offset = 0;
-            } else {
-                let center_line = viewport.height.div_ceil(2);
-                let mut offset = selected_line.saturating_sub(center_line);
-                let max_offset = total_lines.saturating_sub(viewport.height);
-                offset = offset.min(max_offset);
-                viewport.offset = offset;
-                viewport.max_offset = max_offset;
-            }
-        }
+        let mut viewport = Viewport::new(area, self.block).center_on(selected_line, total_lines, 1);
         self.state.update_viewport(viewport);
 
-        let context_lines = self.render_context_lines(&visible_nodes, viewport.offset);
+        let context_lines =
+            self.render_context_lines(&visible_nodes, viewport.offset.min(viewport.max_offset));
+
         let content_height = viewport.height.saturating_sub(context_lines.len());
+
+        viewport.clamp_offset(total_lines, context_lines.len());
+        self.state.update_viewport(viewport);
+
         let start_flat = viewport.offset;
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
