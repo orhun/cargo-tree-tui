@@ -98,7 +98,7 @@ impl StatefulWidget for TreeWidget<'_> {
 
         if let Some(area) = context_area {
             Paragraph::new(context_lines)
-                .style(self.style.style)
+                .style(self.style.context_style)
                 .render(area, buf);
         }
 

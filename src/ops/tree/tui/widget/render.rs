@@ -1,6 +1,6 @@
 use ratatui::{
     layout::Rect,
-    style::{Modifier, Stylize},
+    style::Modifier,
     text::{Line, Span},
     widgets::Block,
 };
@@ -128,7 +128,7 @@ impl<'a, 's> RenderContext<'a, 's> {
                 }
 
                 let base_style = if context_lines {
-                    Modifier::DIM.into()
+                    self.style.context_style
                 } else {
                     segment.edge_style.unwrap_or(self.style.style)
                 };
@@ -217,7 +217,6 @@ impl<'a, 's> RenderContext<'a, 's> {
             .into_iter()
             .rev()
             .filter_map(|id| self.render_node(id, false, true))
-            .map(|line| line.add_modifier(Modifier::DIM))
             .collect()
     }
 }

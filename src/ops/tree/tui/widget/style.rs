@@ -6,6 +6,7 @@ use ratatui::style::{Modifier, Style};
 pub struct TreeWidgetStyle {
     pub highlight_style: Style,
     pub style: Style,
+    pub context_style: Style,
     pub name_style: Style,
     pub version_style: Style,
     pub suffix_style: Style,
@@ -24,6 +25,7 @@ impl Default for TreeWidgetStyle {
         Self {
             highlight_style: Style::from(WARN).add_modifier(Modifier::BOLD),
             style: NOP.into(),
+            context_style: Modifier::DIM.into(),
             name_style: NOP.into(),
             version_style: PLACEHOLDER.into(),
             suffix_style: DEP_BUILD.into(),
