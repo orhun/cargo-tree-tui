@@ -323,8 +323,8 @@ fn breadcrumb_when_scrolled() {
     let expected = r#"
 root
 └──▾ a
-               └──▾ f
-                  └──• g
+   └──▾ b
+      └──▾ c
 root → a → b → c → d → e → f → g
 "#;
 
@@ -338,11 +338,13 @@ root → a → b → c → d → e → f → g
         height: 5,
     };
 
+    state.selected = Some(NodeId(7));
+
     let expected = r#"
 root
 └──▾ a
-               └──▾ f
-                  └──• g
+   └──▾ b
+      └──▾ c
 root → a → b → … → g
 "#;
 
@@ -400,11 +402,12 @@ fn context_bar_when_scrolled() {
         x: 0,
         y: 0,
         width: 40,
-        height: 5,
+        height: 6,
     };
 
     let expected = r#"
 root
+   └──▾ b
       └──▾ c
          └──▾ d
             └──• e
