@@ -1,6 +1,5 @@
 use ratatui::{
     layout::Rect,
-    style::Modifier,
     text::{Line, Span},
     widgets::Block,
 };
@@ -78,9 +77,8 @@ impl<'a, 's> RenderContext<'a, 's> {
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
         for flat_id in start_flat..end_flat {
-            let is_last_rendered = flat_id + 1 == end_flat;
             if let Some(node) = visible_nodes.get(flat_id)
-                && let Some(line) = self.render_node(node.id, is_last_rendered, false)
+                && let Some(line) = self.render_node(node.id, false)
             {
                 lines.push(line);
             }
@@ -94,12 +92,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
     }
 
-    pub fn render_node(
-        &self,
-        node_id: NodeId,
-        show_more_below: bool,
-        context_lines: bool,
-    ) -> Option<Line<'a>> {
+    pub fn render_node(&self, node_id: NodeId, context_lines: bool) -> Option<Line<'a>> {
         let node_data = self.tree.node(node_id)?;
         let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
         let has_children = !node_data.children().is_empty();
@@ -126,23 +119,18 @@ impl<'a, 's> RenderContext<'a, 's> {
                 if segment.is_group {
                     continue;
                 }
-
                 let base_style = if context_lines {
                     self.style.context_style
                 } else {
                     segment.edge_style.unwrap_or(self.style.style)
                 };
-
-                let (symbol, style) = match (segment.has_more_siblings, show_more_below) {
-                    (true, true) => (
-                        self.style.more_below_symbol,
-                        base_style.add_modifier(Modifier::DIM),
-                    ),
-                    (true, false) => (self.style.continuation_symbol, base_style),
-                    (false, _) => (self.style.empty_symbol, base_style),
+                let symbol = if segment.has_more_siblings {
+                    self.style.continuation_symbol
+                } else {
+                    self.style.empty_symbol
                 };
 
-                spans.push(Span::styled(symbol, style));
+                spans.push(Span::styled(symbol, base_style));
             }
 
             if !is_group {
@@ -216,7 +204,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         ancestors
             .into_iter()
             .rev()
-            .filter_map(|id| self.render_node(id, false, true))
+            .filter_map(|id| self.render_node(id, true))
             .collect()
     }
 }
