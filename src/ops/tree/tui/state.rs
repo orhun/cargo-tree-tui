@@ -13,6 +13,7 @@ pub struct TuiState {
     pub dependency_tree: DependencyTree,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
+    pub search_query: Option<String>,
 }
 
 impl TuiState {
@@ -25,6 +26,7 @@ impl TuiState {
             dependency_tree,
             tree_widget_state,
             show_help: false,
+            search_query: None,
         })
     }
 
@@ -37,12 +39,37 @@ impl TuiState {
             return;
         }
 
+        if self.search_query.is_some() {
+            match key_event.code {
+                KeyCode::Esc => {
+                    self.search_query = None;
+                }
+                KeyCode::Backspace => {
+                    if let Some(query) = &mut self.search_query {
+                        if query.pop().is_none() {
+                            self.search_query = None;
+                        }
+                    }
+                }
+                KeyCode::Char(c) => {
+                    if let Some(query) = &mut self.search_query {
+                        query.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
+
         match (key_event.code, key_event.modifiers) {
             (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
             (KeyCode::Char('?'), _) => {
                 self.show_help = !self.show_help;
+            }
+            (KeyCode::Char('/'), _) => {
+                self.search_query = Some(String::new());
             }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
