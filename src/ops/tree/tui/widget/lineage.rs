@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::core::{DependencyTree, NodeId};
 use ratatui::style::Style;
 
@@ -21,11 +23,18 @@ pub struct LineageSegment {
 
 impl Lineage {
     /// Builds lineage information for a node.
-    pub fn build(tree: &DependencyTree, node_id: NodeId, selected: Option<NodeId>) -> Option<Self> {
+    pub fn build(
+        tree: &DependencyTree,
+        node_id: NodeId,
+        selected: Option<NodeId>,
+        visible_filter: Option<&HashSet<NodeId>>,
+    ) -> Option<Self> {
         let node = tree.node(node_id)?;
 
         let is_last = match node.parent() {
-            Some(parent_id) => !Self::has_more_visible_siblings(tree, parent_id, node_id),
+            Some(parent_id) => {
+                !Self::has_more_visible_siblings(tree, parent_id, node_id, visible_filter)
+            }
             None => true,
         };
 
@@ -35,8 +44,12 @@ impl Lineage {
         while let Some(ancestor_id) = current {
             let ancestor = tree.node(ancestor_id)?;
             if let Some(grand_id) = ancestor.parent() {
-                let has_more_siblings =
-                    Self::has_more_visible_siblings(tree, grand_id, ancestor_id);
+                let has_more_siblings = Self::has_more_visible_siblings(
+                    tree,
+                    grand_id,
+                    ancestor_id,
+                    visible_filter,
+                );
                 let edge_style = tree
                     .node(grand_id)
                     .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
@@ -67,6 +80,7 @@ impl Lineage {
         tree: &DependencyTree,
         parent_id: NodeId,
         node_id: NodeId,
+        visible_filter: Option<&HashSet<NodeId>>,
     ) -> bool {
         // Missing parent means no siblings to consider.
         let Some(parent) = tree.node(parent_id) else {
@@ -77,6 +91,10 @@ impl Lineage {
             // Stop once we reach the current node.
             if child == node_id {
                 break;
+            }
+
+            if visible_filter.is_some_and(|filter| !filter.contains(&child)) {
+                continue;
             }
 
             if let Some(node) = tree.node(child) {

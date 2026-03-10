@@ -123,7 +123,10 @@ impl TuiState {
         }
     }
 
-    fn update_search(&mut self) {}
+    fn update_search(&mut self) {
+        self.tree_widget_state
+            .set_search_query(&self.dependency_tree, &self.search_query);
+    }
 
     fn clear_search(&mut self) {
         self.input_mode = InputMode::Normal;

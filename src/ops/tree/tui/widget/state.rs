@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use crate::core::{DependencyTree, NodeId};
+use crate::core::{DependencyNode, DependencyTree, NodeId};
 
 use super::viewport::Viewport;
 
@@ -13,12 +13,16 @@ pub struct TreeWidgetState {
     pub open: HashSet<NodeId>,
     /// Currently selected node.
     pub selected: Option<NodeId>,
-    /// Nodes highlighted by an active filter.
-    pub filtered_nodes: HashSet<NodeId>,
+    /// Nodes kept visible by the active search.
+    pub search_visible_nodes: HashSet<NodeId>,
+    /// Nodes whose crate names directly match the active search query.
+    search_matches: HashSet<NodeId>,
     /// Current viewport.
     pub viewport: Viewport,
     /// Cached visible nodes.
     visible_cache: Vec<VisibleNode>,
+    /// Cached search-filtered visible nodes.
+    search_visible_cache: Vec<VisibleNode>,
     /// Indicates whether the visible cache is outdated.
     dirty: bool,
 }
@@ -37,28 +41,57 @@ impl Default for TreeWidgetState {
         Self {
             open: HashSet::new(),
             selected: None,
-            filtered_nodes: HashSet::new(),
+            search_visible_nodes: HashSet::new(),
+            search_matches: HashSet::new(),
             viewport: Viewport::default(),
             visible_cache: Vec::new(),
+            search_visible_cache: Vec::new(),
             dirty: true,
         }
     }
 }
 
 impl TreeWidgetState {
-    /// Replaces the set of nodes highlighted by a filter.
-    pub fn set_filtered_nodes(&mut self, filtered_nodes: impl IntoIterator<Item = NodeId>) {
-        self.filtered_nodes = filtered_nodes.into_iter().collect();
+    /// Clears any active search filtering state.
+    pub fn clear_search(&mut self) {
+        self.search_visible_nodes.clear();
+        self.search_matches.clear();
+        self.search_visible_cache.clear();
     }
 
-    /// Clears any active filtered-node highlighting.
-    pub fn clear_filtered_nodes(&mut self) {
-        self.filtered_nodes.clear();
+    /// Returns whether a node directly matches the active search query.
+    pub fn is_search_match(&self, node_id: NodeId) -> bool {
+        self.search_matches.contains(&node_id)
     }
 
-    /// Returns whether a node is highlighted by the active filter.
-    pub fn is_filtered(&self, node_id: NodeId) -> bool {
-        self.filtered_nodes.contains(&node_id)
+    /// Updates search-filtered nodes by matching crate names against an ASCII-lowercased query.
+    pub fn set_search_query(&mut self, tree: &DependencyTree, query: &str) {
+        if query.is_empty() {
+            self.clear_search();
+            return;
+        }
+
+        self.search_visible_nodes.clear();
+        self.search_matches.clear();
+        self.search_visible_cache.clear();
+
+        let query = query.to_ascii_lowercase();
+        for &root in tree.roots() {
+            Self::collect_filtered(
+                tree,
+                root,
+                0,
+                &query,
+                &mut self.search_visible_cache,
+                &mut self.search_visible_nodes,
+                &mut self.search_matches,
+            );
+        }
+    }
+
+    /// Returns the set of nodes in the search-filtered view, if search is active.
+    pub fn active_search_visible_nodes(&self) -> Option<&HashSet<NodeId>> {
+        (!self.search_visible_cache.is_empty()).then_some(&self.search_visible_nodes)
     }
 
     /// Moves the selection to the next visible dependency.
@@ -161,6 +194,7 @@ impl TreeWidgetState {
 
         if self.open.insert(selected) {
             self.insert_descendants(selected, tree);
+            self.rebuild_filtered_visible();
             self.dirty = false;
             return;
         }
@@ -186,6 +220,7 @@ impl TreeWidgetState {
         // If the node has children and is open, close it first.
         if !node.children().is_empty() && self.open.remove(&selected) {
             self.prune_descendants(selected);
+            self.rebuild_filtered_visible();
             self.dirty = false;
             return;
         }
@@ -392,7 +427,16 @@ impl TreeWidgetState {
             self.rebuild_visible(tree);
             self.dirty = false;
         }
-        &self.visible_cache
+
+        self.active_visible_nodes()
+    }
+
+    fn active_visible_nodes(&self) -> &[VisibleNode] {
+        if self.search_visible_cache.is_empty() {
+            &self.visible_cache
+        } else {
+            &self.search_visible_cache
+        }
     }
 
     fn rebuild_visible(&mut self, tree: &DependencyTree) {
@@ -400,6 +444,67 @@ impl TreeWidgetState {
         let open = &self.open;
         for &root in tree.roots() {
             Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+        }
+        self.rebuild_filtered_visible();
+    }
+
+    fn rebuild_filtered_visible(&mut self) {
+        self.search_visible_cache.clear();
+        if self.search_visible_nodes.is_empty() {
+            return;
+        }
+
+        self.search_visible_cache.extend(
+            self.visible_cache
+                .iter()
+                .copied()
+                .filter(|node| self.search_visible_nodes.contains(&node.id)),
+        );
+    }
+
+    fn collect_filtered(
+        tree: &DependencyTree,
+        id: NodeId,
+        depth: usize,
+        query: &str,
+        out: &mut Vec<VisibleNode>,
+        search_visible_nodes: &mut HashSet<NodeId>,
+        search_matches: &mut HashSet<NodeId>,
+    ) -> bool {
+        let Some(node) = tree.node(id) else {
+            return false;
+        };
+
+        let is_match = matches!(
+            node,
+            DependencyNode::Crate(dependency)
+                if dependency.name.to_ascii_lowercase().contains(query)
+        );
+        let insert_at = out.len();
+        out.push(VisibleNode { id, depth });
+
+        let mut has_visible_child = false;
+        for &child in node.children() {
+            has_visible_child |= Self::collect_filtered(
+                tree,
+                child,
+                depth + 1,
+                query,
+                out,
+                search_visible_nodes,
+                search_matches,
+            );
+        }
+
+        if is_match || has_visible_child {
+            search_visible_nodes.insert(id);
+            if is_match {
+                search_matches.insert(id);
+            }
+            true
+        } else {
+            out.truncate(insert_at);
+            false
         }
     }
 
@@ -427,20 +532,21 @@ impl TreeWidgetState {
     ///
     /// Returns `true` if a valid selection exists after the operation.
     fn ensure_selection(&mut self, tree: &DependencyTree) -> bool {
-        let _ = self.visible_nodes(tree);
+        let selected = self.selected;
+        let visible = self.visible_nodes(tree);
 
-        if self.visible_cache.is_empty() {
+        if visible.is_empty() {
             self.selected = None;
             return false;
         }
 
-        if let Some(selected) = self.selected
-            && self.visible_cache.iter().any(|node| node.id == selected)
+        if let Some(selected) = selected
+            && visible.iter().any(|node| node.id == selected)
         {
             return true;
         }
 
-        self.selected = Some(self.visible_cache[0].id);
+        self.selected = Some(visible[0].id);
         true
     }
 

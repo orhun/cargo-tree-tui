@@ -94,7 +94,12 @@ impl<'a, 's> RenderContext<'a, 's> {
 
     pub fn render_node(&self, node_id: NodeId, context_lines: bool) -> Option<Line<'a>> {
         let node_data = self.tree.node(node_id)?;
-        let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
+        let lineage = Lineage::build(
+            self.tree,
+            node_id,
+            self.state.selected,
+            self.state.active_search_visible_nodes(),
+        )?;
         let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.contains(&node_id);
         let is_group = node_data.is_group();
@@ -151,7 +156,7 @@ impl<'a, 's> RenderContext<'a, 's> {
 
         let name_style = if lineage.is_selected {
             self.style.highlight_style
-        } else if self.state.is_filtered(node_id) {
+        } else if self.state.is_search_match(node_id) {
             self.style.filtered_style
         } else {
             self.style.name_style
@@ -174,7 +179,7 @@ impl<'a, 's> RenderContext<'a, 's> {
             DependencyNode::Group(group) => {
                 let group_style = if lineage.is_selected {
                     self.style.highlight_style
-                } else if self.state.is_filtered(node_id) {
+                } else if self.state.is_search_match(node_id) {
                     self.style.filtered_style
                 } else {
                     group.kind.style()
