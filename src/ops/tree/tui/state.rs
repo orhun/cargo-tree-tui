@@ -7,13 +7,21 @@ use crate::core::DependencyTree;
 
 use super::widget::TreeWidgetState;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    Normal,
+    Search,
+    SearchResults,
+}
+
 #[derive(Debug)]
 pub struct TuiState {
     pub running: bool,
     pub dependency_tree: DependencyTree,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
-    pub search_query: Option<String>,
+    pub input_mode: InputMode,
+    pub search_query: String,
 }
 
 impl TuiState {
@@ -26,7 +34,8 @@ impl TuiState {
             dependency_tree,
             tree_widget_state,
             show_help: false,
-            search_query: None,
+            input_mode: InputMode::Normal,
+            search_query: String::new(),
         })
     }
 
@@ -39,22 +48,24 @@ impl TuiState {
             return;
         }
 
-        if self.search_query.is_some() {
+        if self.input_mode == InputMode::Search {
             match key_event.code {
                 KeyCode::Esc => {
-                    self.search_query = None;
+                    self.clear_search();
+                }
+                KeyCode::Enter => {
+                    self.input_mode = InputMode::SearchResults;
                 }
                 KeyCode::Backspace => {
-                    if let Some(query) = &mut self.search_query {
-                        if query.pop().is_none() {
-                            self.search_query = None;
-                        }
+                    if self.search_query.pop().is_none() {
+                        self.clear_search();
+                    } else {
+                        self.update_search();
                     }
                 }
                 KeyCode::Char(c) => {
-                    if let Some(query) = &mut self.search_query {
-                        query.push(c);
-                    }
+                    self.search_query.push(c);
+                    self.update_search();
                 }
                 _ => {}
             }
@@ -62,6 +73,9 @@ impl TuiState {
         }
 
         match (key_event.code, key_event.modifiers) {
+            (KeyCode::Esc, _) if self.input_mode == InputMode::SearchResults => {
+                self.clear_search();
+            }
             (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
@@ -69,7 +83,8 @@ impl TuiState {
                 self.show_help = !self.show_help;
             }
             (KeyCode::Char('/'), _) => {
-                self.search_query = Some(String::new());
+                self.input_mode = InputMode::Search;
+                self.update_search();
             }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
@@ -106,5 +121,13 @@ impl TuiState {
             }
             _ => {}
         }
+    }
+
+    fn update_search(&mut self) {}
+
+    fn clear_search(&mut self) {
+        self.input_mode = InputMode::Normal;
+        self.search_query.clear();
+        self.update_search();
     }
 }
