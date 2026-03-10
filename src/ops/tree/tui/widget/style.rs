@@ -5,7 +5,7 @@ use ratatui::style::{Modifier, Style};
 #[derive(Debug)]
 pub struct TreeWidgetStyle {
     pub highlight_style: Style,
-    pub search_match_style: Style,
+    pub filtered_style: Style,
     pub style: Style,
     pub context_style: Style,
     pub name_style: Style,
@@ -24,7 +24,7 @@ impl Default for TreeWidgetStyle {
     fn default() -> Self {
         Self {
             highlight_style: Style::from(WARN).add_modifier(Modifier::BOLD),
-            search_match_style: {
+            filtered_style: {
                 let style: Style = DEP_FEATURE.into();
                 style.remove_modifier(Modifier::DIM)
             },

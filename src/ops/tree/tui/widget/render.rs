@@ -151,6 +151,8 @@ impl<'a, 's> RenderContext<'a, 's> {
 
         let name_style = if lineage.is_selected {
             self.style.highlight_style
+        } else if self.state.is_filtered(node_id) {
+            self.style.filtered_style
         } else {
             self.style.name_style
         };
@@ -172,6 +174,8 @@ impl<'a, 's> RenderContext<'a, 's> {
             DependencyNode::Group(group) => {
                 let group_style = if lineage.is_selected {
                     self.style.highlight_style
+                } else if self.state.is_filtered(node_id) {
+                    self.style.filtered_style
                 } else {
                     group.kind.style()
                 };

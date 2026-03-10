@@ -13,6 +13,8 @@ pub struct TreeWidgetState {
     pub open: HashSet<NodeId>,
     /// Currently selected node.
     pub selected: Option<NodeId>,
+    /// Nodes highlighted by an active filter.
+    pub filtered_nodes: HashSet<NodeId>,
     /// Current viewport.
     pub viewport: Viewport,
     /// Cached visible nodes.
@@ -35,6 +37,7 @@ impl Default for TreeWidgetState {
         Self {
             open: HashSet::new(),
             selected: None,
+            filtered_nodes: HashSet::new(),
             viewport: Viewport::default(),
             visible_cache: Vec::new(),
             dirty: true,
@@ -43,6 +46,21 @@ impl Default for TreeWidgetState {
 }
 
 impl TreeWidgetState {
+    /// Replaces the set of nodes highlighted by a filter.
+    pub fn set_filtered_nodes(&mut self, filtered_nodes: impl IntoIterator<Item = NodeId>) {
+        self.filtered_nodes = filtered_nodes.into_iter().collect();
+    }
+
+    /// Clears any active filtered-node highlighting.
+    pub fn clear_filtered_nodes(&mut self) {
+        self.filtered_nodes.clear();
+    }
+
+    /// Returns whether a node is highlighted by the active filter.
+    pub fn is_filtered(&self, node_id: NodeId) -> bool {
+        self.filtered_nodes.contains(&node_id)
+    }
+
     /// Moves the selection to the next visible dependency.
     pub fn select_next(&mut self, tree: &DependencyTree) {
         if !self.ensure_selection(tree) {
