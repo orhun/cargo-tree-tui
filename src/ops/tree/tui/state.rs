@@ -1,17 +1,35 @@
-use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 
-use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use crate::core::DependencyTree;
 
-use super::widget::TreeWidgetState;
+use super::widget::{SearchState, TreeWidgetState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
     Normal,
     Search,
     SearchResults,
+}
+
+#[derive(Debug)]
+pub enum Event {
+    Key(KeyEvent),
+    SearchResult(SearchResult),
+}
+
+#[derive(Debug, Clone)]
+pub struct SearchRequest {
+    pub generation: u64,
+    pub query: String,
+}
+
+#[derive(Debug)]
+pub struct SearchResult {
+    pub generation: u64,
+    pub query: String,
+    pub search_state: SearchState,
 }
 
 #[derive(Debug)]
@@ -22,24 +40,34 @@ pub struct TuiState {
     pub show_help: bool,
     pub input_mode: InputMode,
     pub search_query: String,
+    search_generation: u64,
+    search_tx: Sender<SearchRequest>,
 }
 
 impl TuiState {
-    pub fn new(manifest_path: Option<PathBuf>) -> Result<Self> {
-        let dependency_tree = DependencyTree::load(manifest_path)?;
+    pub fn new(dependency_tree: DependencyTree, search_tx: Sender<SearchRequest>) -> Self {
         let mut tree_widget_state = TreeWidgetState::default();
         tree_widget_state.expand_all(&dependency_tree);
-        Ok(TuiState {
+        TuiState {
             running: true,
             dependency_tree,
             tree_widget_state,
             show_help: false,
             input_mode: InputMode::Normal,
             search_query: String::new(),
-        })
+            search_generation: 0,
+            search_tx,
+        }
     }
 
-    pub fn handle_key_event(&mut self, key_event: KeyEvent) {
+    pub fn handle_event(&mut self, event: Event) {
+        match event {
+            Event::Key(key_event) => self.handle_key_event(key_event),
+            Event::SearchResult(search_result) => self.handle_search_result(search_result),
+        }
+    }
+
+    fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.show_help {
             // Close help popup on any key press
             self.show_help = false;
@@ -60,12 +88,12 @@ impl TuiState {
                     if self.search_query.pop().is_none() {
                         self.clear_search();
                     } else {
-                        self.update_search();
+                        self.request_search();
                     }
                 }
                 KeyCode::Char(c) => {
                     self.search_query.push(c);
-                    self.update_search();
+                    self.request_search();
                 }
                 _ => {}
             }
@@ -84,7 +112,6 @@ impl TuiState {
             }
             (KeyCode::Char('/'), _) => {
                 self.input_mode = InputMode::Search;
-                self.update_search();
             }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
@@ -123,14 +150,36 @@ impl TuiState {
         }
     }
 
-    fn update_search(&mut self) {
+    fn handle_search_result(&mut self, search_result: SearchResult) {
+        if search_result.generation != self.search_generation
+            || search_result.query != self.search_query
+        {
+            return;
+        }
+
         self.tree_widget_state
-            .set_search_query(&self.dependency_tree, &self.search_query);
+            .apply_search_state(search_result.search_state);
+    }
+
+    fn request_search(&mut self) {
+        self.search_generation += 1;
+        let request = SearchRequest {
+            generation: self.search_generation,
+            query: self.search_query.clone(),
+        };
+
+        if request.query.is_empty() {
+            self.tree_widget_state.clear_search();
+            return;
+        }
+
+        let _ = self.search_tx.send(request);
     }
 
     fn clear_search(&mut self) {
         self.input_mode = InputMode::Normal;
+        self.search_generation += 1;
         self.search_query.clear();
-        self.update_search();
+        self.tree_widget_state.clear_search();
     }
 }

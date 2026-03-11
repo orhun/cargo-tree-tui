@@ -36,6 +36,15 @@ pub struct VisibleNode {
     pub depth: usize,
 }
 
+/// Search result payload applied to the visible tree state.
+#[derive(Debug, Default, Clone)]
+pub struct SearchState {
+    /// Nodes kept visible by the active search.
+    pub visible_nodes: HashSet<NodeId>,
+    /// Nodes whose crate names directly match the active search query.
+    pub matches: HashSet<NodeId>,
+}
+
 impl Default for TreeWidgetState {
     fn default() -> Self {
         Self {
@@ -64,29 +73,33 @@ impl TreeWidgetState {
         self.search_matches.contains(&node_id)
     }
 
-    /// Updates search-filtered nodes by matching crate names against an ASCII-lowercased query.
-    pub fn set_search_query(&mut self, tree: &DependencyTree, query: &str) {
+    /// Applies externally computed search state to the visible tree.
+    pub fn apply_search_state(&mut self, search_state: SearchState) {
+        self.search_visible_nodes = search_state.visible_nodes;
+        self.search_matches = search_state.matches;
+        self.rebuild_filtered_visible();
+    }
+
+    /// Computes search-filtered nodes by matching crate names against an ASCII-lowercased query.
+    pub fn search(tree: &DependencyTree, query: &str) -> SearchState {
         if query.is_empty() {
-            self.clear_search();
-            return;
+            return SearchState::default();
         }
 
-        self.search_visible_nodes.clear();
-        self.search_matches.clear();
-        self.search_visible_cache.clear();
-
+        let mut search_state = SearchState::default();
         let query = query.to_ascii_lowercase();
+
         for &root in tree.roots() {
             Self::collect_filtered(
                 tree,
                 root,
                 &query,
-                &mut self.search_visible_nodes,
-                &mut self.search_matches,
+                &mut search_state.visible_nodes,
+                &mut search_state.matches,
             );
         }
 
-        self.rebuild_filtered_visible();
+        search_state
     }
 
     /// Returns the set of nodes in the search-filtered view, if search is active.

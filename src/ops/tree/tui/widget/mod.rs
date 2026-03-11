@@ -10,7 +10,11 @@ use crate::{core::DependencyTree, ops::tree::tui::widget::viewport::Viewport};
 
 use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
-pub use self::{render::RenderOutput, state::TreeWidgetState, style::TreeWidgetStyle};
+pub use self::{
+    render::RenderOutput,
+    state::{SearchState, TreeWidgetState},
+    style::TreeWidgetStyle,
+};
 
 mod breadcrumb;
 mod lineage;
