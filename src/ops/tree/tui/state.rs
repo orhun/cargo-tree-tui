@@ -101,7 +101,11 @@ impl TuiState {
                     self.clear_search();
                 }
                 KeyCode::Enter => {
-                    self.input_mode = InputMode::SearchResults;
+                    if self.search_query.is_empty() {
+                        self.clear_search();
+                    } else {
+                        self.input_mode = InputMode::SearchResults;
+                    }
                 }
                 KeyCode::Backspace => {
                     if self.search_query.pop().is_none() {
