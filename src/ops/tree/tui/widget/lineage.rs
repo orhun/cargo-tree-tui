@@ -44,12 +44,8 @@ impl Lineage {
         while let Some(ancestor_id) = current {
             let ancestor = tree.node(ancestor_id)?;
             if let Some(grand_id) = ancestor.parent() {
-                let has_more_siblings = Self::has_more_visible_siblings(
-                    tree,
-                    grand_id,
-                    ancestor_id,
-                    visible_filter,
-                );
+                let has_more_siblings =
+                    Self::has_more_visible_siblings(tree, grand_id, ancestor_id, visible_filter);
                 let edge_style = tree
                     .node(grand_id)
                     .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
