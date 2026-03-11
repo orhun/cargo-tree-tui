@@ -32,10 +32,10 @@ pub fn run(args: TreeArgs) -> Result<()> {
             state.handle_event(event);
         }
 
-        if event::poll(Duration::from_millis(16))? {
-            if let CrosstermEvent::Key(key_event) = event::read()? {
-                state.handle_event(Event::Key(key_event));
-            }
+        if event::poll(Duration::from_millis(16))?
+            && let CrosstermEvent::Key(key_event) = event::read()?
+        {
+            state.handle_event(Event::Key(key_event));
         }
     }
 
