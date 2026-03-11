@@ -80,13 +80,13 @@ impl TreeWidgetState {
             Self::collect_filtered(
                 tree,
                 root,
-                0,
                 &query,
-                &mut self.search_visible_cache,
                 &mut self.search_visible_nodes,
                 &mut self.search_matches,
             );
         }
+
+        self.rebuild_filtered_visible();
     }
 
     /// Returns the set of nodes in the search-filtered view, if search is active.
@@ -465,9 +465,7 @@ impl TreeWidgetState {
     fn collect_filtered(
         tree: &DependencyTree,
         id: NodeId,
-        depth: usize,
         query: &str,
-        out: &mut Vec<VisibleNode>,
         search_visible_nodes: &mut HashSet<NodeId>,
         search_matches: &mut HashSet<NodeId>,
     ) -> bool {
@@ -480,20 +478,11 @@ impl TreeWidgetState {
             DependencyNode::Crate(dependency)
                 if dependency.name.to_ascii_lowercase().contains(query)
         );
-        let insert_at = out.len();
-        out.push(VisibleNode { id, depth });
 
         let mut has_visible_child = false;
         for &child in node.children() {
-            has_visible_child |= Self::collect_filtered(
-                tree,
-                child,
-                depth + 1,
-                query,
-                out,
-                search_visible_nodes,
-                search_matches,
-            );
+            has_visible_child |=
+                Self::collect_filtered(tree, child, query, search_visible_nodes, search_matches);
         }
 
         if is_match || has_visible_child {
@@ -503,7 +492,6 @@ impl TreeWidgetState {
             }
             true
         } else {
-            out.truncate(insert_at);
             false
         }
     }
