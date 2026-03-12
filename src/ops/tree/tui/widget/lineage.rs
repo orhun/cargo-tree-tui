@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::core::{DependencyTree, NodeId};
 use ratatui::style::Style;
 
@@ -27,13 +25,13 @@ impl Lineage {
         tree: &DependencyTree,
         node_id: NodeId,
         selected: Option<NodeId>,
-        visible_filter: Option<&HashSet<NodeId>>,
+        last_visible_non_group_child: Option<&[Option<NodeId>]>,
     ) -> Option<Self> {
         let node = tree.node(node_id)?;
 
         let is_last = match node.parent() {
             Some(parent_id) => {
-                !Self::has_more_visible_siblings(tree, parent_id, node_id, visible_filter)
+                !Self::has_more_visible_siblings(node_id, parent_id, last_visible_non_group_child)
             }
             None => true,
         };
@@ -45,10 +43,9 @@ impl Lineage {
             let ancestor = tree.node(ancestor_id)?;
             if let Some(grand_id) = ancestor.parent() {
                 let has_more_siblings = Self::has_more_visible_siblings(
-                    tree,
-                    grand_id,
                     ancestor_id,
-                    visible_filter,
+                    grand_id,
+                    last_visible_non_group_child,
                 );
                 let edge_style = tree
                     .node(grand_id)
@@ -77,35 +74,13 @@ impl Lineage {
     /// - We use this when deciding `├──` vs `└──` and whether to draw `│` guides.
     /// - Group headers are labels, so they don't keep the branch guide `│` alive.
     fn has_more_visible_siblings(
-        tree: &DependencyTree,
-        parent_id: NodeId,
         node_id: NodeId,
-        visible_filter: Option<&HashSet<NodeId>>,
+        parent_id: NodeId,
+        last_visible_non_group_child: Option<&[Option<NodeId>]>,
     ) -> bool {
-        // Missing parent means no siblings to consider.
-        let Some(parent) = tree.node(parent_id) else {
-            return false;
-        };
-
-        for &child in parent.children().iter().rev() {
-            // Stop once we reach the current node.
-            if child == node_id {
-                break;
-            }
-
-            if visible_filter.is_some_and(|filter| !filter.contains(&child)) {
-                continue;
-            }
-
-            if let Some(node) = tree.node(child) {
-                // Any non-group sibling keeps the branch alive.
-                if !node.is_group() {
-                    return true;
-                }
-            }
-        }
-
-        // Only group siblings (or none) appear after this node.
-        false
+        last_visible_non_group_child
+            .and_then(|children| children.get(parent_id.0))
+            .and_then(|&last_child| last_child)
+            .is_some_and(|last_child| last_child != node_id)
     }
 }
