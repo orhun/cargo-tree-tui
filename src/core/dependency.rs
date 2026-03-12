@@ -63,6 +63,8 @@ impl TryFrom<DependencyKind> for DependencyType {
 pub struct Dependency {
     /// Crate name.
     pub name: String,
+    /// Lowercased crate name for search.
+    pub lower_name: String,
     /// Crate version.
     pub version: String,
     /// Local manifest directory (only for workspace members).
@@ -154,6 +156,8 @@ pub struct DependencyTree {
     pub nodes: Vec<DependencyNode>,
     /// Workspace members represented as node ids (entry points into the arena).
     pub roots: Vec<NodeId>,
+    /// Flat list of crate nodes for search.
+    pub crate_nodes: Vec<NodeId>,
 }
 
 impl DependencyTree {
@@ -219,6 +223,11 @@ impl DependencyTree {
 
         Ok(DependencyTree {
             workspace_name,
+            crate_nodes: nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
+                .collect(),
             nodes,
             roots,
         })
@@ -232,6 +241,11 @@ impl DependencyTree {
     /// Returns the workspace root node ids that should be rendered.
     pub fn roots(&self) -> &[NodeId] {
         &self.roots
+    }
+
+    /// Returns the crate node ids that can be matched by search.
+    pub fn crate_nodes(&self) -> &[NodeId] {
+        &self.crate_nodes
     }
 
     /// Recursively constructs dependency nodes.
@@ -275,6 +289,7 @@ impl DependencyTree {
         let node_id = NodeId(nodes.len());
         nodes.push(DependencyNode::Crate(Dependency {
             name: package.name.to_string(),
+            lower_name: package.name.to_ascii_lowercase(),
             version: package.version.to_string(),
             manifest_dir,
             is_proc_macro,
