@@ -44,6 +44,30 @@ pub struct VisibleNode {
     pub depth: usize,
 }
 
+/// Search result payload computed off the UI thread.
+#[derive(Debug, Clone)]
+pub struct SearchState {
+    /// Nodes kept visible by the active search, indexed by node id.
+    pub visible_nodes: Vec<bool>,
+    /// Nodes whose crate names directly match the active search query, indexed by node id.
+    pub matches: Vec<bool>,
+    /// Nodes visible because of the active search.
+    pub visible_ids: Vec<NodeId>,
+    /// Nodes that directly match the active search.
+    pub match_ids: Vec<NodeId>,
+}
+
+impl SearchState {
+    fn new(node_count: usize) -> Self {
+        Self {
+            visible_nodes: vec![false; node_count],
+            matches: vec![false; node_count],
+            visible_ids: Vec::new(),
+            match_ids: Vec::new(),
+        }
+    }
+}
+
 impl Default for TreeWidgetState {
     fn default() -> Self {
         Self {
@@ -96,54 +120,56 @@ impl TreeWidgetState {
         self.search_matches.get(node_id.0).copied().unwrap_or(false)
     }
 
+    /// Applies externally computed search state to the visible tree.
+    pub fn apply_search_state(&mut self, tree: &DependencyTree, search_state: SearchState) {
+        self.ensure_node_capacity(tree);
+        self.search_query.clear();
+        self.search_visible_nodes = search_state.visible_nodes;
+        self.search_matches = search_state.matches;
+        self.search_visible_ids = search_state.visible_ids;
+        self.search_match_ids = search_state.match_ids;
+        self.rebuild_filtered_visible(tree);
+    }
+
     /// Updates search-filtered nodes by matching crate names against an ASCII-lowercased query.
     pub fn set_search_query(&mut self, tree: &DependencyTree, query: &str) {
-        self.ensure_node_capacity(tree);
-        self.ensure_visible_nodes(tree);
-
         if query.is_empty() {
             self.clear_search();
             return;
         }
 
+        self.search_query.clear();
+        self.search_query.push_str(query);
+        self.apply_search_state(tree, Self::search(tree, query));
+    }
+
+    /// Computes search-filtered nodes without mutating widget state.
+    pub fn search(tree: &DependencyTree, query: &str) -> SearchState {
+        if query.is_empty() {
+            return SearchState::new(tree.nodes.len());
+        }
+
         let query = query.to_ascii_lowercase();
-        let previous_query = std::mem::replace(&mut self.search_query, query.clone());
-        let previous_match_ids = std::mem::take(&mut self.search_match_ids);
+        let mut search_state = SearchState::new(tree.nodes.len());
 
-        for node_id in self.search_visible_ids.drain(..) {
-            self.search_visible_nodes[node_id.0] = false;
-        }
-        for &node_id in &previous_match_ids {
-            self.search_matches[node_id.0] = false;
-        }
-        self.search_visible_cache.clear();
-        self.search_visible_last_non_group_child.fill(None);
-
-        let candidates: &[NodeId] =
-            if !previous_query.is_empty() && query.starts_with(&previous_query) {
-                &previous_match_ids
-            } else {
-                tree.crate_nodes()
-            };
-
-        for &node_id in candidates {
+        for &node_id in tree.crate_nodes() {
             let Some(DependencyNode::Crate(dependency)) = tree.node(node_id) else {
                 continue;
             };
 
             if dependency.lower_name.contains(&query) {
-                self.search_matches[node_id.0] = true;
-                self.search_match_ids.push(node_id);
+                search_state.matches[node_id.0] = true;
+                search_state.match_ids.push(node_id);
                 Self::include_ancestors(
                     tree,
                     node_id,
-                    &mut self.search_visible_nodes,
-                    &mut self.search_visible_ids,
+                    &mut search_state.visible_nodes,
+                    &mut search_state.visible_ids,
                 );
             }
         }
 
-        self.rebuild_filtered_visible(tree);
+        search_state
     }
 
     /// Returns the last visible non-group child per parent for the active view.
