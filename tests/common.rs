@@ -27,7 +27,6 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
         let node = match node.kind {
             TestNodeKind::Crate => DependencyNode::Crate(Dependency {
                 name: node.name.to_string(),
-                lower_name: node.name.to_ascii_lowercase(),
                 version: String::new(),
                 manifest_dir: None,
                 is_proc_macro: false,

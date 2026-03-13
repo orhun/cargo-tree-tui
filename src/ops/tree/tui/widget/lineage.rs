@@ -73,6 +73,8 @@ impl Lineage {
     ///
     /// - We use this when deciding `├──` vs `└──` and whether to draw `│` guides.
     /// - Group headers are labels, so they don't keep the branch guide `│` alive.
+    /// - The sibling question is answered from a precomputed per-parent cache for the
+    ///   active visible slice, avoiding repeated sibling scans during rendering.
     fn has_more_visible_siblings(
         node_id: NodeId,
         parent_id: NodeId,

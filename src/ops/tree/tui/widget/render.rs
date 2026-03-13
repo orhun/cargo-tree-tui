@@ -58,6 +58,7 @@ impl<'a, 's> RenderContext<'a, 's> {
             return RenderOutput::default();
         };
 
+        // Keep the visible list borrowed from state instead of cloning it per frame.
         self.state.ensure_visible_nodes(self.tree);
         let selected_line = selected_idx + 1;
         let total_lines = self.state.active_visible_nodes().len();

@@ -63,8 +63,6 @@ impl TryFrom<DependencyKind> for DependencyType {
 pub struct Dependency {
     /// Crate name.
     pub name: String,
-    /// Lowercased crate name for search.
-    pub lower_name: String,
     /// Crate version.
     pub version: String,
     /// Local manifest directory (only for workspace members).
@@ -289,7 +287,6 @@ impl DependencyTree {
         let node_id = NodeId(nodes.len());
         nodes.push(DependencyNode::Crate(Dependency {
             name: package.name.to_string(),
-            lower_name: package.name.to_ascii_lowercase(),
             version: package.version.to_string(),
             manifest_dir,
             is_proc_macro,

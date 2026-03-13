@@ -15,21 +15,19 @@ pub struct TreeWidgetState {
     search_visible_nodes: Vec<bool>,
     /// Nodes whose crate names directly match the active search query, indexed by node id.
     search_matches: Vec<bool>,
-    /// Lowercased active query used for incremental search refinement.
-    search_query: String,
-    /// Nodes visible because of the active search, used for cheap resets.
+    /// Node ids whose `search_visible_nodes` bit is currently set, used for cheap resets.
     search_visible_ids: Vec<NodeId>,
-    /// Nodes that directly match the active search, used for cheap resets and refinement.
+    /// Node ids whose `search_matches` bit is currently set, used for cheap resets and refinement.
     search_match_ids: Vec<NodeId>,
     /// Current viewport.
     pub viewport: Viewport,
-    /// Cached visible nodes.
+    /// Flattened visible tree for the current expansion state.
     visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in the main visible cache.
+    /// Last visible non-group child per parent in `visible_cache`, indexed by parent node id.
     visible_last_non_group_child: Vec<Option<NodeId>>,
-    /// Cached search-filtered visible nodes.
+    /// Flattened visible tree restricted to the active search result.
     search_visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in the search-filtered cache.
+    /// Last visible non-group child per parent in `search_visible_cache`, indexed by parent node id.
     search_visible_last_non_group_child: Vec<Option<NodeId>>,
     /// Indicates whether the visible cache is outdated.
     dirty: bool,
@@ -76,7 +74,6 @@ impl Default for TreeWidgetState {
             selected: None,
             search_visible_nodes: Vec::new(),
             search_matches: Vec::new(),
-            search_query: String::new(),
             search_visible_ids: Vec::new(),
             search_match_ids: Vec::new(),
             viewport: Viewport::default(),
@@ -89,6 +86,10 @@ impl Default for TreeWidgetState {
 }
 
 impl TreeWidgetState {
+    /// Grows all node-indexed caches to match the current tree size.
+    ///
+    /// The widget uses parallel `Vec`s keyed by `NodeId` instead of hash maps/sets so
+    /// search, expansion, and render-time membership checks become cheap indexed loads.
     fn ensure_node_capacity(&mut self, tree: &DependencyTree) {
         let len = tree.nodes.len();
         if self.open.len() == len {
@@ -110,7 +111,6 @@ impl TreeWidgetState {
         for node_id in self.search_match_ids.drain(..) {
             self.search_matches[node_id.0] = false;
         }
-        self.search_query.clear();
         self.search_visible_cache.clear();
         self.search_visible_last_non_group_child.fill(None);
     }
@@ -123,7 +123,6 @@ impl TreeWidgetState {
     /// Applies externally computed search state to the visible tree.
     pub fn apply_search_state(&mut self, tree: &DependencyTree, search_state: SearchState) {
         self.ensure_node_capacity(tree);
-        self.search_query.clear();
         self.search_visible_nodes = search_state.visible_nodes;
         self.search_matches = search_state.matches;
         self.search_visible_ids = search_state.visible_ids;
@@ -131,15 +130,13 @@ impl TreeWidgetState {
         self.rebuild_filtered_visible(tree);
     }
 
-    /// Updates search-filtered nodes by matching crate names against an ASCII-lowercased query.
+    /// Updates search-filtered nodes by matching crate names case-sensitively.
     pub fn set_search_query(&mut self, tree: &DependencyTree, query: &str) {
         if query.is_empty() {
             self.clear_search();
             return;
         }
 
-        self.search_query.clear();
-        self.search_query.push_str(query);
         self.apply_search_state(tree, Self::search(tree, query));
     }
 
@@ -149,7 +146,6 @@ impl TreeWidgetState {
             return SearchState::new(tree.nodes.len());
         }
 
-        let query = query.to_ascii_lowercase();
         let mut search_state = SearchState::new(tree.nodes.len());
 
         for &node_id in tree.crate_nodes() {
@@ -157,7 +153,7 @@ impl TreeWidgetState {
                 continue;
             };
 
-            if dependency.lower_name.contains(&query) {
+            if dependency.name.contains(query) {
                 search_state.matches[node_id.0] = true;
                 search_state.match_ids.push(node_id);
                 Self::include_ancestors(
@@ -173,6 +169,9 @@ impl TreeWidgetState {
     }
 
     /// Returns the last visible non-group child per parent for the active view.
+    ///
+    /// This lets the render path answer "is this the final visible branch?" with one
+    /// indexed lookup rather than rescanning siblings in the current filtered slice.
     pub fn active_last_visible_non_group_child(&self) -> Option<&[Option<NodeId>]> {
         if self.search_visible_cache.is_empty() {
             Some(&self.visible_last_non_group_child)
@@ -517,6 +516,7 @@ impl TreeWidgetState {
         self.active_visible_nodes()
     }
 
+    /// Rebuilds the visible caches lazily when tree openness has changed.
     pub fn ensure_visible_nodes(&mut self, tree: &DependencyTree) {
         if self.dirty {
             self.rebuild_visible(tree);
@@ -524,6 +524,10 @@ impl TreeWidgetState {
         }
     }
 
+    /// Returns the currently active visible slice.
+    ///
+    /// Search reuses the main visible cache and layers a filtered slice on top of it, so
+    /// callers can treat both modes uniformly.
     pub fn active_visible_nodes(&self) -> &[VisibleNode] {
         if self.search_visible_cache.is_empty() {
             &self.visible_cache
@@ -546,6 +550,7 @@ impl TreeWidgetState {
         self.rebuild_filtered_visible(tree);
     }
 
+    /// Rebuilds the visible slice for the active search result while preserving the main cache.
     fn rebuild_filtered_visible(&mut self, tree: &DependencyTree) {
         self.search_visible_cache.clear();
         self.search_visible_last_non_group_child.fill(None);
@@ -566,6 +571,10 @@ impl TreeWidgetState {
         );
     }
 
+    /// Marks a matching node and all of its visible ancestors in the search bitset.
+    ///
+    /// `search_visible_ids` tracks which bits were flipped so clearing or replacing search
+    /// state only touches previously marked nodes rather than resetting the whole vector.
     fn include_ancestors(
         tree: &DependencyTree,
         id: NodeId,
@@ -666,6 +675,11 @@ impl TreeWidgetState {
         self.ensure_selection(tree);
     }
 
+    /// Records, for each parent in the active visible slice, the last visible non-group child.
+    ///
+    /// The render path uses this cache to decide whether a node should draw a continuing
+    /// branch (`├──`) or a terminating branch (`└──`) without rescanning siblings.
+    /// Group nodes are skipped because they are labels and do not keep branch guides alive.
     fn populate_last_non_group_child_map(
         tree: &DependencyTree,
         visible_nodes: &[VisibleNode],
