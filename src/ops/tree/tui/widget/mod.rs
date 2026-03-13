@@ -30,6 +30,7 @@ pub struct TreeWidget<'a> {
     block: Option<Block<'a>>,
     scrollbar: Option<Scrollbar<'a>>,
     search_query: Option<&'a str>,
+    search_prompt_symbol: char,
     style: TreeWidgetStyle,
 }
 
@@ -40,6 +41,7 @@ impl<'a> TreeWidget<'a> {
             block: None,
             scrollbar: None,
             search_query: None,
+            search_prompt_symbol: '/',
             style: TreeWidgetStyle::default(),
         }
     }
@@ -56,6 +58,11 @@ impl<'a> TreeWidget<'a> {
 
     pub fn search_query(mut self, search_query: Option<&'a str>) -> Self {
         self.search_query = search_query;
+        self
+    }
+
+    pub fn search_prompt_symbol(mut self, search_prompt_symbol: char) -> Self {
+        self.search_prompt_symbol = search_prompt_symbol;
         self
     }
 }
@@ -135,7 +142,10 @@ impl StatefulWidget for TreeWidget<'_> {
         if let Some(area) = search_area
             && let Some(search_query) = self.search_query
         {
-            let search_text = Line::from(vec!["/".bold(), Span::raw(search_query)]);
+            let search_text = Line::from(vec![
+                Span::raw(self.search_prompt_symbol.to_string()).bold(),
+                Span::raw(search_query),
+            ]);
             Paragraph::new(search_text)
                 .style(self.style.style)
                 .render(area, buf);

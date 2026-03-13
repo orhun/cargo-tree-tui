@@ -24,6 +24,8 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
 }
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
+    state.advance_spinner();
+
     let tree_widget = TreeWidget::new(&state.dependency_tree)
         .search_query(
             matches!(
@@ -32,6 +34,7 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
             )
             .then_some(state.search_query.as_str()),
         )
+        .search_prompt_symbol(state.search_prompt_symbol())
         .scrollbar(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .track_symbol(Some("┆"))

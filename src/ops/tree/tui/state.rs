@@ -40,6 +40,8 @@ pub struct TuiState {
     pub show_help: bool,
     pub input_mode: InputMode,
     pub search_query: String,
+    pub search_running: bool,
+    spinner_frame: usize,
     search_generation: u64,
     search_tx: Sender<SearchRequest>,
 }
@@ -55,6 +57,8 @@ impl TuiState {
             show_help: false,
             input_mode: InputMode::Normal,
             search_query: String::new(),
+            search_running: false,
+            spinner_frame: 0,
             search_generation: 0,
             search_tx,
         }
@@ -64,6 +68,21 @@ impl TuiState {
         match event {
             Event::Key(key_event) => self.handle_key_event(key_event),
             Event::SearchResult(search_result) => self.handle_search_result(search_result),
+        }
+    }
+
+    pub fn advance_spinner(&mut self) {
+        if self.search_running {
+            self.spinner_frame = self.spinner_frame.wrapping_add(1);
+        }
+    }
+
+    pub fn search_prompt_symbol(&self) -> char {
+        const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+        if self.search_running {
+            FRAMES[self.spinner_frame % FRAMES.len()]
+        } else {
+            '/'
         }
     }
 
@@ -161,6 +180,7 @@ impl TuiState {
             return;
         }
 
+        self.search_running = false;
         self.tree_widget_state
             .apply_search_state(&self.dependency_tree, search_result.search_state);
     }
@@ -173,10 +193,12 @@ impl TuiState {
         };
 
         if request.query.is_empty() {
+            self.search_running = false;
             self.tree_widget_state.clear_search();
             return;
         }
 
+        self.search_running = true;
         let _ = self.search_tx.send(request);
     }
 
@@ -184,6 +206,7 @@ impl TuiState {
         self.input_mode = InputMode::Normal;
         self.search_generation += 1;
         self.search_query.clear();
+        self.search_running = false;
         self.tree_widget_state.clear_search();
     }
 }
