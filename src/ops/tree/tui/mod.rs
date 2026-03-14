@@ -5,14 +5,14 @@ pub mod widget;
 use clap_cargo::style::{HEADER, USAGE};
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Position, Rect},
     style::{Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Paragraph, Scrollbar, ScrollbarOrientation},
 };
 
 use help::HelpPopup;
-use state::TuiState;
+use state::{InputMode, TuiState};
 use widget::TreeWidget;
 
 pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
@@ -24,14 +24,33 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
 }
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
-    let tree_widget = TreeWidget::new(&state.dependency_tree).scrollbar(
-        Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .track_symbol(Some("┆"))
-            .thumb_symbol("▐")
-            .begin_symbol(Some("▴"))
-            .end_symbol(Some("▾")),
-    );
+    state.advance_spinner();
+
+    let tree_widget = TreeWidget::new(&state.dependency_tree)
+        .search_query(
+            matches!(
+                state.input_mode,
+                InputMode::Search | InputMode::SearchResults
+            )
+            .then_some(state.search_query.as_str()),
+        )
+        .search_prompt_symbol(state.search_prompt_symbol())
+        .scrollbar(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .track_symbol(Some("┆"))
+                .thumb_symbol("▐")
+                .begin_symbol(Some("▴"))
+                .end_symbol(Some("▾")),
+        );
     frame.render_stateful_widget(tree_widget, area, &mut state.tree_widget_state);
+
+    if state.input_mode == InputMode::Search {
+        let query = state.search_query.as_str();
+        frame.set_cursor_position(Position::new(
+            area.x + Line::from(query).width() as u16 + 1,
+            area.bottom().saturating_sub(2),
+        ));
+    }
 }
 
 pub fn draw_help_text(frame: &mut Frame, area: Rect) {

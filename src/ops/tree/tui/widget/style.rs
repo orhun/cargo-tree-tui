@@ -1,10 +1,11 @@
-use clap_cargo::style::{DEP_BUILD, NOP, PLACEHOLDER, WARN};
+use clap_cargo::style::{DEP_BUILD, DEP_FEATURE, NOP, PLACEHOLDER, WARN};
 use ratatui::style::{Modifier, Style};
 
 /// Visual configuration for [`TreeWidget`](super::TreeWidget).
 #[derive(Debug)]
 pub struct TreeWidgetStyle {
     pub highlight_style: Style,
+    pub filtered_style: Style,
     pub style: Style,
     pub context_style: Style,
     pub name_style: Style,
@@ -23,6 +24,10 @@ impl Default for TreeWidgetStyle {
     fn default() -> Self {
         Self {
             highlight_style: Style::from(WARN).add_modifier(Modifier::BOLD),
+            filtered_style: {
+                let style: Style = DEP_FEATURE.into();
+                style.remove_modifier(Modifier::DIM)
+            },
             style: NOP.into(),
             context_style: Modifier::DIM.into(),
             name_style: NOP.into(),

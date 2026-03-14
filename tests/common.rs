@@ -50,6 +50,11 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
 
     DependencyTree {
         workspace_name: "workspace".to_string(),
+        crate_nodes: arena
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
+            .collect(),
         nodes: arena,
         roots,
     }

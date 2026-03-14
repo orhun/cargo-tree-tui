@@ -58,15 +58,18 @@ impl<'a, 's> RenderContext<'a, 's> {
             return RenderOutput::default();
         };
 
-        let visible_nodes = self.state.visible_nodes(self.tree).to_vec();
+        // Keep the visible list borrowed from state instead of cloning it per frame.
+        self.state.ensure_visible_nodes(self.tree);
         let selected_line = selected_idx + 1;
-        let total_lines = visible_nodes.len();
+        let total_lines = self.state.active_visible_nodes().len();
 
         let mut viewport = Viewport::new(area, self.block).center_on(selected_line, total_lines, 1);
         self.state.update_viewport(viewport);
 
-        let context_lines =
-            self.render_context_lines(&visible_nodes, viewport.offset.min(viewport.max_offset));
+        let context_lines = {
+            let visible_nodes = self.state.active_visible_nodes();
+            self.render_context_lines(visible_nodes, viewport.offset.min(viewport.max_offset))
+        };
 
         let content_height = viewport.height.saturating_sub(context_lines.len());
 
@@ -76,11 +79,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         let start_flat = viewport.offset;
         let mut lines = Vec::with_capacity(content_height);
         let end_flat = (start_flat + content_height).min(total_lines);
-        for flat_id in start_flat..end_flat {
-            if let Some(node) = visible_nodes.get(flat_id)
-                && let Some(line) = self.render_node(node.id, false)
-            {
-                lines.push(line);
+        {
+            let visible_nodes = self.state.active_visible_nodes();
+            for flat_id in start_flat..end_flat {
+                if let Some(node) = visible_nodes.get(flat_id)
+                    && let Some(line) = self.render_node(node.id, false)
+                {
+                    lines.push(line);
+                }
             }
         }
 
@@ -94,9 +100,14 @@ impl<'a, 's> RenderContext<'a, 's> {
 
     pub fn render_node(&self, node_id: NodeId, context_lines: bool) -> Option<Line<'a>> {
         let node_data = self.tree.node(node_id)?;
-        let lineage = Lineage::build(self.tree, node_id, self.state.selected)?;
+        let lineage = Lineage::build(
+            self.tree,
+            node_id,
+            self.state.selected,
+            self.state.active_last_visible_non_group_child(),
+        )?;
         let has_children = !node_data.children().is_empty();
-        let is_open = self.state.open.contains(&node_id);
+        let is_open = self.state.open.get(node_id.0).copied().unwrap_or(false);
         let is_group = node_data.is_group();
 
         let is_root = node_data.parent().is_none();
@@ -151,6 +162,8 @@ impl<'a, 's> RenderContext<'a, 's> {
 
         let name_style = if lineage.is_selected {
             self.style.highlight_style
+        } else if self.state.is_search_match(node_id) {
+            self.style.filtered_style
         } else {
             self.style.name_style
         };
@@ -172,6 +185,8 @@ impl<'a, 's> RenderContext<'a, 's> {
             DependencyNode::Group(group) => {
                 let group_style = if lineage.is_selected {
                     self.style.highlight_style
+                } else if self.state.is_search_match(node_id) {
+                    self.style.filtered_style
                 } else {
                     group.kind.style()
                 };

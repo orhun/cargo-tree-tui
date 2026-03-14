@@ -1,6 +1,8 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
+    style::Stylize,
+    text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget},
 };
 
@@ -8,7 +10,11 @@ use crate::{core::DependencyTree, ops::tree::tui::widget::viewport::Viewport};
 
 use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
-pub use self::{render::RenderOutput, state::TreeWidgetState, style::TreeWidgetStyle};
+pub use self::{
+    render::RenderOutput,
+    state::{SearchState, TreeWidgetState},
+    style::TreeWidgetStyle,
+};
 
 mod breadcrumb;
 mod lineage;
@@ -23,6 +29,8 @@ pub struct TreeWidget<'a> {
     tree: &'a DependencyTree,
     block: Option<Block<'a>>,
     scrollbar: Option<Scrollbar<'a>>,
+    search_query: Option<&'a str>,
+    search_prompt_symbol: char,
     style: TreeWidgetStyle,
 }
 
@@ -32,6 +40,8 @@ impl<'a> TreeWidget<'a> {
             tree,
             block: None,
             scrollbar: None,
+            search_query: None,
+            search_prompt_symbol: '/',
             style: TreeWidgetStyle::default(),
         }
     }
@@ -43,6 +53,16 @@ impl<'a> TreeWidget<'a> {
 
     pub fn scrollbar(mut self, scrollbar: Scrollbar<'a>) -> Self {
         self.scrollbar = Some(scrollbar);
+        self
+    }
+
+    pub fn search_query(mut self, search_query: Option<&'a str>) -> Self {
+        self.search_query = search_query;
+        self
+    }
+
+    pub fn search_prompt_symbol(mut self, search_prompt_symbol: char) -> Self {
+        self.search_prompt_symbol = search_prompt_symbol;
         self
     }
 }
@@ -96,6 +116,17 @@ impl StatefulWidget for TreeWidget<'_> {
             None
         };
 
+        let search_area = if self.search_query.is_some() && content_area.height > 0 {
+            content_area.height = content_area.height.saturating_sub(1);
+            Some(Rect {
+                y: content_area.y.saturating_add(content_area.height),
+                height: 1,
+                ..content_area
+            })
+        } else {
+            None
+        };
+
         if let Some(area) = context_area {
             Paragraph::new(context_lines)
                 .style(self.style.context_style)
@@ -106,6 +137,18 @@ impl StatefulWidget for TreeWidget<'_> {
             Paragraph::new(lines)
                 .style(self.style.style)
                 .render(content_area, buf);
+        }
+
+        if let Some(area) = search_area
+            && let Some(search_query) = self.search_query
+        {
+            let search_text = Line::from(vec![
+                Span::raw(self.search_prompt_symbol.to_string()).bold(),
+                Span::raw(search_query),
+            ]);
+            Paragraph::new(search_text)
+                .style(self.style.style)
+                .render(area, buf);
         }
 
         if let Some(area) = breadcrumb_area {
