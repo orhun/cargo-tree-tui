@@ -334,7 +334,7 @@ root → a → b → c → d → e → f → g
     let area = Rect {
         x: 0,
         y: 0,
-        width: 40,
+        width: 55,
         height: 5,
     };
 
@@ -401,7 +401,7 @@ fn context_bar_when_scrolled() {
     let area = Rect {
         x: 0,
         y: 0,
-        width: 40,
+        width: 55,
         height: 6,
     };
 

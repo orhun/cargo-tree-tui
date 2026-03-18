@@ -12,6 +12,7 @@ use super::{state::TreeWidgetState, style::TreeWidgetStyle};
 
 const CONNECTOR_SYMBOL: char = '→';
 const CONTINUATION_SYMBOL: char = '…';
+const FOOTER_RESERVED_WIDTH: u16 = 32;
 
 #[derive(Clone)]
 struct Crumb {
@@ -117,7 +118,7 @@ impl Widget for Breadcrumb<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let crumbs = self.collect_crumbs();
 
-        let max_width = area.width.saturating_sub(20) as usize;
+        let max_width = area.width.saturating_sub(FOOTER_RESERVED_WIDTH) as usize;
         let display_crumbs = Self::elide_crumbs(crumbs, max_width);
         let mut spans = Vec::new();
 
