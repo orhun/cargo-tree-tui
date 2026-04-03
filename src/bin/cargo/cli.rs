@@ -133,6 +133,7 @@ pub struct TreeArgs {
     /// Path to Cargo.lock
     #[arg(long = "lockfile-path", value_name = "PATH")]
     pub lockfile_path: Option<PathBuf>,
+
 }
 
 #[test]

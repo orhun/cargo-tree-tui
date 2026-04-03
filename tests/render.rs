@@ -311,7 +311,7 @@ fn breadcrumb_when_scrolled() {
     let tree = build_tree(&nodes);
     let mut state = TreeWidgetState::default();
     state.expand_all(&tree);
-    state.selected = Some(NodeId(7));
+    state.set_selected_node_id(&tree, NodeId(7));
 
     let area = Rect {
         x: 0,
@@ -338,7 +338,7 @@ root → a → b → c → d → e → f → g
         height: 5,
     };
 
-    state.selected = Some(NodeId(7));
+    state.set_selected_node_id(&tree, NodeId(7));
 
     let expected = r#"
 root
@@ -396,7 +396,7 @@ fn context_bar_when_scrolled() {
     let tree = build_tree(&nodes);
     let mut state = TreeWidgetState::default();
     state.expand_all(&tree);
-    state.selected = Some(NodeId(5));
+    state.set_selected_node_id(&tree, NodeId(5));
 
     let area = Rect {
         x: 0,

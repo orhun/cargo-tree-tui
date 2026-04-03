@@ -22,22 +22,16 @@ pub struct TestNode {
 pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     let mut arena = Vec::with_capacity(nodes.len());
     for node in nodes {
-        let parent = node.parent.map(NodeId);
         let children = node.children.iter().copied().map(NodeId).collect();
         let node = match node.kind {
             TestNodeKind::Crate => DependencyNode::Crate(Dependency {
-                name: node.name.to_string(),
-                version: String::new(),
+                name: node.name.into(),
+                version: "".into(),
                 manifest_dir: None,
                 is_proc_macro: false,
-                parent,
                 children,
             }),
-            TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup {
-                kind,
-                parent,
-                children,
-            }),
+            TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup { kind, children }),
         };
         arena.push(node);
     }
@@ -48,13 +42,23 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
         .filter_map(|(idx, node)| node.parent.is_none().then_some(NodeId(idx)))
         .collect();
 
+    // Build reverse parent map from children lists.
+    let mut parents = vec![Vec::new(); arena.len()];
+    for (idx, node) in arena.iter().enumerate() {
+        let parent_id = NodeId(idx);
+        for &child_id in node.children() {
+            parents[child_id.0].push(parent_id);
+        }
+    }
+
     DependencyTree {
-        workspace_name: "workspace".to_string(),
+        workspace_name: "workspace".into(),
         crate_nodes: arena
             .iter()
             .enumerate()
             .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
             .collect(),
+        parents,
         nodes: arena,
         roots,
     }

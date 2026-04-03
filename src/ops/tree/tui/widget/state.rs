@@ -1,6 +1,15 @@
+use rustc_hash::FxHashSet;
+
 use crate::core::{DependencyNode, DependencyTree, NodeId};
 
 use super::viewport::Viewport;
+
+/// Index into a flattened visible-node cache.
+///
+/// Distinguishes visible-cache positions from [`NodeId`] at the type level
+/// so the two kinds of `usize` index cannot be accidentally mixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct VisIdx(pub usize);
 
 /// [`TreeWidget`] state that tracks open nodes and the current selection.
 ///
@@ -9,8 +18,8 @@ use super::viewport::Viewport;
 pub struct TreeWidgetState {
     /// Open/closed state indexed by node id.
     pub open: Vec<bool>,
-    /// Currently selected node.
-    pub selected: Option<NodeId>,
+    /// Index into the active visible cache identifying the selected position.
+    selected: Option<VisIdx>,
     /// Nodes kept visible by the active search, indexed by node id.
     search_visible_nodes: Vec<bool>,
     /// Nodes whose crate names directly match the active search query, indexed by node id.
@@ -23,14 +32,18 @@ pub struct TreeWidgetState {
     pub viewport: Viewport,
     /// Flattened visible tree for the current expansion state.
     visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in `visible_cache`, indexed by parent node id.
-    visible_last_non_group_child: Vec<Option<NodeId>>,
+    /// Last visible non-group child per parent in `visible_cache`, indexed by parent visible index.
+    visible_last_non_group_child: Vec<Option<VisIdx>>,
     /// Flattened visible tree restricted to the active search result.
     search_visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in `search_visible_cache`, indexed by parent node id.
-    search_visible_last_non_group_child: Vec<Option<NodeId>>,
+    /// Last visible non-group child per parent in `search_visible_cache`, indexed by parent visible index.
+    search_visible_last_non_group_child: Vec<Option<VisIdx>>,
     /// Indicates whether the visible cache is outdated.
     dirty: bool,
+    /// Indicates sibling links / last-child map need recomputation for `visible_cache`.
+    visible_metadata_dirty: bool,
+    /// Indicates sibling links / last-child map need recomputation for `search_visible_cache`.
+    search_metadata_dirty: bool,
 }
 
 /// Visible node metadata used for navigation.
@@ -40,6 +53,12 @@ pub struct VisibleNode {
     pub id: NodeId,
     /// Depth in the tree hierarchy.
     pub depth: usize,
+    /// Index of the parent in the same visible cache, or `None` for roots.
+    pub parent_vis_idx: Option<VisIdx>,
+    /// Next sibling in the same visible cache sharing the same parent.
+    pub next_sibling: Option<VisIdx>,
+    /// Previous sibling in the same visible cache sharing the same parent.
+    pub prev_sibling: Option<VisIdx>,
 }
 
 /// Search result payload computed off the UI thread.
@@ -81,11 +100,29 @@ impl Default for TreeWidgetState {
             search_visible_cache: Vec::new(),
             search_visible_last_non_group_child: Vec::new(),
             dirty: true,
+            visible_metadata_dirty: true,
+            search_metadata_dirty: false,
         }
     }
 }
 
 impl TreeWidgetState {
+    /// Returns the `NodeId` of the currently selected visible position.
+    pub fn selected_node_id(&self) -> Option<NodeId> {
+        let idx = self.selected?;
+        self.active_visible_nodes().get(idx.0).map(|node| node.id)
+    }
+
+    /// Sets the selection to the visible position of the given `NodeId`.
+    ///
+    /// When the same `NodeId` appears at multiple visible positions, selects
+    /// the first occurrence.
+    pub fn set_selected_node_id(&mut self, tree: &DependencyTree, id: NodeId) {
+        self.ensure_visible_nodes(tree);
+        let visible = self.active_visible_nodes();
+        self.selected = visible.iter().position(|node| node.id == id).map(VisIdx);
+    }
+
     /// Grows all node-indexed caches to match the current tree size.
     ///
     /// The widget uses parallel `Vec`s keyed by `NodeId` instead of hash maps/sets so
@@ -99,8 +136,6 @@ impl TreeWidgetState {
         self.open.resize(len, false);
         self.search_visible_nodes.resize(len, false);
         self.search_matches.resize(len, false);
-        self.visible_last_non_group_child.resize(len, None);
-        self.search_visible_last_non_group_child.resize(len, None);
     }
 
     /// Clears any active search filtering state.
@@ -127,7 +162,7 @@ impl TreeWidgetState {
         self.search_matches = search_state.matches;
         self.search_visible_ids = search_state.visible_ids;
         self.search_match_ids = search_state.match_ids;
-        self.rebuild_filtered_visible(tree);
+        self.rebuild_filtered_visible();
     }
 
     /// Updates search-filtered nodes by matching crate names case-sensitively.
@@ -170,9 +205,8 @@ impl TreeWidgetState {
 
     /// Returns the last visible non-group child per parent for the active view.
     ///
-    /// This lets the render path answer "is this the final visible branch?" with one
-    /// indexed lookup rather than rescanning siblings in the current filtered slice.
-    pub fn active_last_visible_non_group_child(&self) -> Option<&[Option<NodeId>]> {
+    /// Callers must call [`ensure_visible_metadata`] first if the cache may be dirty.
+    pub fn active_last_visible_non_group_child(&self) -> Option<&[Option<VisIdx>]> {
         if self.search_visible_cache.is_empty() {
             Some(&self.visible_last_non_group_child)
         } else {
@@ -186,22 +220,10 @@ impl TreeWidgetState {
             return;
         }
 
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
-        };
-
-        let next = {
-            let visible = self.visible_nodes(tree);
-            let Some(current_index) = Self::selected_index(visible, selected) else {
-                return;
-            };
-
-            visible.get(current_index + 1).map(|node| node.id)
-        };
-
-        if let Some(next_id) = next {
-            self.selected = Some(next_id);
+        let Some(VisIdx(idx)) = self.selected else { return };
+        let visible = self.active_visible_nodes();
+        if idx + 1 < visible.len() {
+            self.selected = Some(VisIdx(idx + 1));
         }
     }
 
@@ -211,26 +233,9 @@ impl TreeWidgetState {
             return;
         }
 
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
-        };
-
-        let previous = {
-            let visible = self.visible_nodes(tree);
-            let Some(current_index) = Self::selected_index(visible, selected) else {
-                return;
-            };
-
-            if current_index > 0 {
-                Some(visible[current_index - 1].id)
-            } else {
-                None
-            }
-        };
-
-        if let Some(previous_id) = previous {
-            self.selected = Some(previous_id);
+        let Some(VisIdx(idx)) = self.selected else { return };
+        if idx > 0 {
+            self.selected = Some(VisIdx(idx - 1));
         }
     }
 
@@ -239,12 +244,10 @@ impl TreeWidgetState {
         if !self.ensure_selection(tree) {
             return;
         }
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
+        let Some(node_id) = self.selected_node_id() else {
+            return;
         };
-
-        let Some(node) = tree.node(selected) else {
+        let Some(node) = tree.node(node_id) else {
             return;
         };
 
@@ -252,7 +255,7 @@ impl TreeWidgetState {
             return;
         }
 
-        if self.open[selected.0] {
+        if self.open[node_id.0] {
             self.collapse(tree);
         } else {
             self.expand(tree);
@@ -264,13 +267,11 @@ impl TreeWidgetState {
         if !self.ensure_selection(tree) {
             return;
         }
-
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
+        let Some(idx) = self.selected else { return };
+        let Some(node_id) = self.selected_node_id() else {
+            return;
         };
-
-        let Some(node) = tree.node(selected) else {
+        let Some(node) = tree.node(node_id) else {
             return;
         };
 
@@ -278,15 +279,16 @@ impl TreeWidgetState {
             return;
         }
 
-        if !self.open[selected.0] {
-            self.open[selected.0] = true;
-            self.insert_descendants(selected, tree);
-            self.rebuild_filtered_visible(tree);
-            self.dirty = false;
+        if !self.open[node_id.0] {
+            self.expand_splice(tree, idx, node_id);
+            // Selection stays at same vis_idx: the expanded node didn't move.
             return;
         }
 
-        self.selected = Some(node.children()[0]);
+        // Already open — move into first child (next visible entry at deeper depth).
+        if idx.0 + 1 < self.active_visible_nodes().len() {
+            self.selected = Some(VisIdx(idx.0 + 1));
+        }
     }
 
     /// Collapses the selected node or moves focus to its parent when already closed.
@@ -294,95 +296,63 @@ impl TreeWidgetState {
         if !self.ensure_selection(tree) {
             return;
         }
-
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
+        let Some(idx) = self.selected else { return };
+        let Some(node_id) = self.selected_node_id() else {
+            return;
         };
-
-        let Some(node) = tree.node(selected) else {
+        let Some(node) = tree.node(node_id) else {
             return;
         };
 
         // If the node has children and is open, close it first.
-        if !node.children().is_empty() && self.open[selected.0] {
-            self.open[selected.0] = false;
-            self.prune_descendants(selected);
-            self.rebuild_filtered_visible(tree);
-            self.dirty = false;
+        if !node.children().is_empty() && self.open[node_id.0] {
+            self.collapse_splice(idx, node_id);
+            // Selection stays at same vis_idx: the collapsed node didn't move.
             return;
         }
 
-        // Otherwise move focus to its parent when possible.
-        if let Some(parent) = node.parent() {
-            self.selected = Some(parent);
+        // Otherwise move focus to its parent in the visible cache.
+        let visible = self.active_visible_nodes();
+        if let Some(parent_vis_idx) = visible.get(idx.0).and_then(|v| v.parent_vis_idx) {
+            self.selected = Some(parent_vis_idx);
         }
     }
 
     /// Moves the selection to the parent node, if any.
     pub fn select_parent(&mut self, tree: &DependencyTree) {
-        let Some(selected) = self.selected else {
+        if !self.ensure_selection(tree) {
             return;
-        };
-
-        if let Some(node) = tree.node(selected)
-            && let Some(parent) = node.parent()
-        {
-            self.selected = Some(parent);
+        }
+        let Some(idx) = self.selected else { return };
+        let visible = self.active_visible_nodes();
+        if let Some(parent_vis_idx) = visible.get(idx.0).and_then(|v| v.parent_vis_idx) {
+            self.selected = Some(parent_vis_idx);
         }
     }
 
     /// Moves the selection to the next sibling, if any.
     pub fn select_next_sibling(&mut self, tree: &DependencyTree) {
-        let Some(selected) = self.selected else {
+        if !self.ensure_selection(tree) {
             return;
-        };
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
-
-        let siblings: &[NodeId] = if let Some(parent) = node.parent() {
-            let Some(parent_node) = tree.node(parent) else {
-                return;
-            };
-            parent_node.children()
-        } else {
-            tree.roots()
-        };
-
-        let Some(pos) = siblings.iter().position(|&id| id == selected) else {
-            return;
-        };
-
-        if pos + 1 < siblings.len() {
-            self.selected = Some(siblings[pos + 1]);
+        }
+        self.ensure_visible_metadata(tree);
+        let Some(idx) = self.selected else { return };
+        let visible = self.active_visible_nodes();
+        if let Some(next) = visible[idx.0].next_sibling {
+            self.selected = Some(next);
         }
     }
 
     /// Moves the selection to the previous sibling, if any.
     pub fn select_previous_sibling(&mut self, tree: &DependencyTree) {
-        let Some(selected) = self.selected else {
+        if !self.ensure_selection(tree) {
             return;
-        };
-        let Some(node) = tree.node(selected) else {
-            return;
-        };
-
-        let siblings: &[NodeId] = if let Some(parent) = node.parent() {
-            let Some(parent_node) = tree.node(parent) else {
-                return;
-            };
-            parent_node.children()
-        } else {
-            tree.roots()
-        };
-
-        let Some(pos) = siblings.iter().position(|&id| id == selected) else {
-            return;
-        };
-
-        if pos > 0 {
-            self.selected = Some(siblings[pos - 1]);
+        }
+        self.ensure_visible_metadata(tree);
+        let Some(idx) = self.selected else { return };
+        let visible = self.active_visible_nodes();
+        if let Some(prev) = visible[idx.0].prev_sibling {
+            self.selected = Some(prev);
         }
     }
 
@@ -403,36 +373,14 @@ impl TreeWidgetState {
         if !self.ensure_selection(tree) {
             return;
         }
-
-        let selected = match self.selected {
-            Some(id) => id,
-            None => return,
-        };
-
-        let next = {
-            let visible = self.visible_nodes(tree);
-            let Some(current_index) = Self::selected_index(visible, selected) else {
-                return;
-            };
-
-            let len = visible.len() as isize;
-            if len == 0 {
-                return;
-            }
-
-            let mut next_index = current_index as isize + delta;
-            if next_index < 0 {
-                next_index = 0;
-            } else if next_index >= len {
-                next_index = len - 1;
-            }
-
-            visible.get(next_index as usize).map(|node| node.id)
-        };
-
-        if let Some(next_id) = next {
-            self.selected = Some(next_id);
+        let Some(VisIdx(idx)) = self.selected else { return };
+        let len = self.active_visible_nodes().len() as isize;
+        if len == 0 {
+            return;
         }
+
+        let next = (idx as isize + delta).clamp(0, len - 1) as usize;
+        self.selected = Some(VisIdx(next));
     }
 
     /// Opens all nodes up to the specified depth.
@@ -442,14 +390,22 @@ impl TreeWidgetState {
         }
         self.ensure_node_capacity(tree);
         self.open.fill(false);
+        let mut ancestors = FxHashSet::default();
         for &root in tree.roots() {
-            self.open_node(tree, root, 1, max_depth);
+            self.open_node(tree, root, 1, max_depth, &mut ancestors);
         }
         self.dirty = true;
         self.ensure_selection(tree);
     }
 
-    fn open_node(&mut self, tree: &DependencyTree, id: NodeId, depth: usize, max_depth: usize) {
+    fn open_node(
+        &mut self,
+        tree: &DependencyTree,
+        id: NodeId,
+        depth: usize,
+        max_depth: usize,
+        ancestors: &mut FxHashSet<NodeId>,
+    ) {
         if depth >= max_depth {
             return;
         }
@@ -461,53 +417,14 @@ impl TreeWidgetState {
             }
 
             self.open[id.0] = true;
+            ancestors.insert(id);
             for &child in node.children() {
-                self.open_node(tree, child, depth + 1, max_depth);
+                if !ancestors.contains(&child) {
+                    self.open_node(tree, child, depth + 1, max_depth, ancestors);
+                }
             }
+            ancestors.remove(&id);
         }
-    }
-
-    /// Removes all descendants of `id` from the visible cache in-place.
-    fn prune_descendants(&mut self, id: NodeId) {
-        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
-            return;
-        };
-        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
-            return;
-        };
-
-        let first_descendant = start + 1;
-        if first_descendant >= self.visible_cache.len() {
-            return;
-        }
-
-        let end = self.visible_cache[first_descendant..]
-            .iter()
-            .position(|node| node.depth <= depth)
-            .map(|offset| first_descendant + offset)
-            .unwrap_or(self.visible_cache.len());
-
-        self.visible_cache.drain(first_descendant..end);
-    }
-
-    /// Inserts the visible descendants of `id` into the cache in-place.
-    fn insert_descendants(&mut self, id: NodeId, tree: &DependencyTree) {
-        let Some(start) = self.visible_cache.iter().position(|node| node.id == id) else {
-            return;
-        };
-        let Some(depth) = self.visible_cache.get(start).map(|node| node.depth) else {
-            return;
-        };
-
-        let mut subtree = Vec::new();
-        Self::collect_visible(&self.open, tree, id, depth, &mut subtree);
-        if subtree.len() <= 1 {
-            return;
-        }
-
-        let insert_at = start + 1;
-        self.visible_cache
-            .splice(insert_at..insert_at, subtree.into_iter().skip(1));
     }
 
     /// Returns cached visible nodes along with their depth in the hierarchy.
@@ -524,6 +441,28 @@ impl TreeWidgetState {
         }
     }
 
+    /// Lazily computes sibling links and last-child map for the active visible cache.
+    pub fn ensure_visible_metadata(&mut self, tree: &DependencyTree) {
+        if self.visible_metadata_dirty {
+            Self::populate_sibling_links(&mut self.visible_cache);
+            Self::populate_last_non_group_child_map(
+                tree,
+                &self.visible_cache,
+                &mut self.visible_last_non_group_child,
+            );
+            self.visible_metadata_dirty = false;
+        }
+        if self.search_metadata_dirty && !self.search_visible_cache.is_empty() {
+            Self::populate_sibling_links(&mut self.search_visible_cache);
+            Self::populate_last_non_group_child_map(
+                tree,
+                &self.search_visible_cache,
+                &mut self.search_visible_last_non_group_child,
+            );
+            self.search_metadata_dirty = false;
+        }
+    }
+
     /// Returns the currently active visible slice.
     ///
     /// Search reuses the main visible cache and layers a filtered slice on top of it, so
@@ -536,39 +475,145 @@ impl TreeWidgetState {
         }
     }
 
+    /// Incrementally expands a node by splicing its newly-visible descendants
+    /// into `visible_cache`, avoiding a full-tree DFS rebuild.
+    fn expand_splice(&mut self, tree: &DependencyTree, vis_idx: VisIdx, node_id: NodeId) {
+        self.open[node_id.0] = true;
+
+        let parent_depth = self.visible_cache[vis_idx.0].depth;
+        let mut new_nodes = Vec::new();
+        let mut ancestors = FxHashSet::default();
+
+        if let Some(node) = tree.node(node_id) {
+            ancestors.insert(node_id);
+            for &child in node.children() {
+                if !ancestors.contains(&child) {
+                    Self::collect_visible(
+                        &self.open,
+                        tree,
+                        child,
+                        parent_depth + 1,
+                        None, // parent_vis_idx recomputed below
+                        &mut new_nodes,
+                        &mut ancestors,
+                    );
+                }
+            }
+        }
+
+        if new_nodes.is_empty() {
+            return;
+        }
+
+        let insert_pos = vis_idx.0 + 1;
+        self.visible_cache.splice(insert_pos..insert_pos, new_nodes);
+        self.recompute_metadata();
+    }
+
+    /// Incrementally collapses a node by draining its descendants from
+    /// `visible_cache`, avoiding a full-tree DFS rebuild.
+    fn collapse_splice(&mut self, vis_idx: VisIdx, node_id: NodeId) {
+        self.open[node_id.0] = false;
+
+        let parent_depth = self.visible_cache[vis_idx.0].depth;
+        let start = vis_idx.0 + 1;
+
+        // Descendants are the contiguous block with depth > parent_depth.
+        let end = self.visible_cache[start..]
+            .iter()
+            .position(|n| n.depth <= parent_depth)
+            .map(|offset| start + offset)
+            .unwrap_or(self.visible_cache.len());
+
+        if start < end {
+            self.visible_cache.drain(start..end);
+            self.recompute_metadata();
+        }
+    }
+
+    /// Recomputes all derived metadata after an incremental splice.
+    fn recompute_metadata(&mut self) {
+        Self::recompute_parent_vis_idx(&mut self.visible_cache);
+        self.visible_metadata_dirty = true;
+        self.rebuild_filtered_visible();
+    }
+
+    /// Recomputes `parent_vis_idx` for all entries using the `depth` field.
+    ///
+    /// Because the cache is in DFS order, a depth stack tracks the most recent
+    /// node at each depth. For a node at depth `d`, its parent is the last node
+    /// seen at depth `d - 1`.
+    fn recompute_parent_vis_idx(visible_nodes: &mut [VisibleNode]) {
+        let mut depth_stack: Vec<VisIdx> = Vec::with_capacity(64);
+
+        for (i, node) in visible_nodes.iter_mut().enumerate() {
+            let depth = node.depth;
+            depth_stack.truncate(depth);
+
+            node.parent_vis_idx = if depth == 0 {
+                None
+            } else {
+                depth_stack.last().copied()
+            };
+
+            if depth_stack.len() == depth {
+                depth_stack.push(VisIdx(i));
+            } else {
+                depth_stack[depth] = VisIdx(i);
+            }
+        }
+    }
+
     fn rebuild_visible(&mut self, tree: &DependencyTree) {
         self.visible_cache.clear();
         let open = &self.open;
+        let mut ancestors = FxHashSet::default();
         for &root in tree.roots() {
-            Self::collect_visible(open, tree, root, 0, &mut self.visible_cache);
+            Self::collect_visible(
+                open,
+                tree,
+                root,
+                0,
+                None,
+                &mut self.visible_cache,
+                &mut ancestors,
+            );
         }
-        Self::populate_last_non_group_child_map(
-            tree,
-            &self.visible_cache,
-            &mut self.visible_last_non_group_child,
-        );
-        self.rebuild_filtered_visible(tree);
+        self.visible_metadata_dirty = true;
+        self.rebuild_filtered_visible();
     }
 
     /// Rebuilds the visible slice for the active search result while preserving the main cache.
-    fn rebuild_filtered_visible(&mut self, tree: &DependencyTree) {
+    fn rebuild_filtered_visible(&mut self) {
         self.search_visible_cache.clear();
         self.search_visible_last_non_group_child.fill(None);
         if self.search_match_ids.is_empty() {
             return;
         }
 
-        self.search_visible_cache.extend(
-            self.visible_cache
-                .iter()
-                .copied()
-                .filter(|node| self.search_visible_nodes[node.id.0]),
-        );
-        Self::populate_last_non_group_child_map(
-            tree,
-            &self.search_visible_cache,
-            &mut self.search_visible_last_non_group_child,
-        );
+        // Map from original visible_cache index to new search_visible_cache index.
+        let mut old_to_new: Vec<Option<VisIdx>> = vec![None; self.visible_cache.len()];
+
+        for (old_idx, node) in self.visible_cache.iter().enumerate() {
+            if self.search_visible_nodes[node.id.0] {
+                let new_idx = VisIdx(self.search_visible_cache.len());
+                old_to_new[old_idx] = Some(new_idx);
+
+                let remapped_parent = node
+                    .parent_vis_idx
+                    .and_then(|old_parent| old_to_new[old_parent.0]);
+
+                self.search_visible_cache.push(VisibleNode {
+                    id: node.id,
+                    depth: node.depth,
+                    parent_vis_idx: remapped_parent,
+                    next_sibling: None,
+                    prev_sibling: None,
+                });
+            }
+        }
+
+        self.search_metadata_dirty = true;
     }
 
     /// Marks a matching node and all of its visible ancestors in the search bitset.
@@ -590,7 +635,7 @@ impl TreeWidgetState {
             search_visible_nodes[node_id.0] = true;
             search_visible_ids.push(node_id);
 
-            current = tree.node(node_id).and_then(|node| node.parent());
+            current = tree.parent_of(node_id);
         }
     }
 
@@ -599,18 +644,39 @@ impl TreeWidgetState {
         tree: &DependencyTree,
         id: NodeId,
         depth: usize,
+        parent_vis_idx: Option<VisIdx>,
         out: &mut Vec<VisibleNode>,
+        ancestors: &mut FxHashSet<NodeId>,
     ) {
-        out.push(VisibleNode { id, depth });
+        let my_vis_idx = VisIdx(out.len());
+        out.push(VisibleNode {
+            id,
+            depth,
+            parent_vis_idx,
+            next_sibling: None,
+            prev_sibling: None,
+        });
 
         if !open[id.0] {
             return;
         }
 
         if let Some(node) = tree.node(id) {
+            ancestors.insert(id);
             for &child in node.children() {
-                Self::collect_visible(open, tree, child, depth + 1, out);
+                if !ancestors.contains(&child) {
+                    Self::collect_visible(
+                        open,
+                        tree,
+                        child,
+                        depth + 1,
+                        Some(my_vis_idx),
+                        out,
+                        ancestors,
+                    );
+                }
             }
+            ancestors.remove(&id);
         }
     }
 
@@ -618,7 +684,6 @@ impl TreeWidgetState {
     ///
     /// Returns `true` if a valid selection exists after the operation.
     fn ensure_selection(&mut self, tree: &DependencyTree) -> bool {
-        let selected = self.selected;
         self.ensure_visible_nodes(tree);
         let visible = self.active_visible_nodes();
 
@@ -627,30 +692,27 @@ impl TreeWidgetState {
             return false;
         }
 
-        if let Some(selected) = selected
-            && visible.iter().any(|node| node.id == selected)
+        if let Some(idx) = self.selected
+            && idx.0 < visible.len()
         {
             return true;
         }
 
-        self.selected = Some(visible[0].id);
+        self.selected = Some(VisIdx(0));
         true
     }
 
     /// Returns the index of the selected node among visible nodes.
-    pub fn selected_position(&mut self, tree: &DependencyTree) -> Option<usize> {
+    pub fn selected_position(&mut self, tree: &DependencyTree) -> Option<VisIdx> {
         if !self.ensure_selection(tree) {
             return None;
         }
-
-        let selected = self.selected?;
-        let visible = self.active_visible_nodes();
-        Self::selected_index(visible, selected)
+        self.selected
     }
 
-    /// Helper to find the index of the selected node in the visible list.
-    fn selected_index(visible: &[VisibleNode], target: NodeId) -> Option<usize> {
-        visible.iter().position(|node| node.id == target)
+    /// Returns the cached selection index without triggering a rebuild.
+    pub fn selected_position_cached(&self) -> Option<VisIdx> {
+        self.selected
     }
 
     /// Updates the available viewport.
@@ -675,7 +737,7 @@ impl TreeWidgetState {
         self.ensure_selection(tree);
     }
 
-    /// Records, for each parent in the active visible slice, the last visible non-group child.
+    /// Records, for each parent visible position, the last visible non-group child position.
     ///
     /// The render path uses this cache to decide whether a node should draw a continuing
     /// branch (`├──`) or a terminating branch (`└──`) without rescanning siblings.
@@ -683,10 +745,12 @@ impl TreeWidgetState {
     fn populate_last_non_group_child_map(
         tree: &DependencyTree,
         visible_nodes: &[VisibleNode],
-        target: &mut [Option<NodeId>],
+        target: &mut Vec<Option<VisIdx>>,
     ) {
-        target.fill(None);
-        for node in visible_nodes {
+        target.clear();
+        target.resize(visible_nodes.len(), None);
+
+        for (vis_idx, node) in visible_nodes.iter().enumerate() {
             let Some(tree_node) = tree.node(node.id) else {
                 continue;
             };
@@ -695,9 +759,32 @@ impl TreeWidgetState {
                 continue;
             }
 
-            if let Some(parent_id) = tree_node.parent() {
-                target[parent_id.0] = Some(node.id);
+            if let Some(parent_vis_idx) = node.parent_vis_idx {
+                target[parent_vis_idx.0] = Some(VisIdx(vis_idx));
             }
+        }
+    }
+
+    /// Links each visible node to its next and previous sibling (same parent).
+    ///
+    /// Because nodes are stored in DFS order, children of the same parent appear
+    /// in order but not contiguously. A single forward pass with per-parent tracking
+    /// is sufficient to wire up both directions.
+    fn populate_sibling_links(visible_nodes: &mut [VisibleNode]) {
+        // Track the last child seen for each parent visible index.
+        let mut last_child_of: Vec<Option<VisIdx>> = vec![None; visible_nodes.len()];
+
+        for i in 0..visible_nodes.len() {
+            let Some(parent) = visible_nodes[i].parent_vis_idx else {
+                continue;
+            };
+
+            let current = VisIdx(i);
+            if let Some(prev) = last_child_of[parent.0] {
+                visible_nodes[prev.0].next_sibling = Some(current);
+                visible_nodes[i].prev_sibling = Some(prev);
+            }
+            last_child_of[parent.0] = Some(current);
         }
     }
 }

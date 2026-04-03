@@ -12,7 +12,7 @@ use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
 pub use self::{
     render::RenderOutput,
-    state::{SearchState, TreeWidgetState},
+    state::{SearchState, TreeWidgetState, VisIdx},
     style::TreeWidgetStyle,
 };
 
