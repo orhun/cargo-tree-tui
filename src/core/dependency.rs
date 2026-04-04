@@ -307,8 +307,9 @@ struct CollectedPackages {
     roots: Vec<NodeId>,
 }
 
-/// BFS from workspace roots: create one `DependencyNode::Crate` per reachable
-/// package. Nodes have empty children at this point.
+/// Create one `DependencyNode::Crate` per reachable package.
+///
+/// DFS from workspace roots. Nodes have empty children at this point.
 fn collect_packages(resolved: &ResolvedMetadata<'_>) -> CollectedPackages {
     let capacity = resolved.packages.len();
     let mut remaining: Vec<&PackageId> = Vec::with_capacity(capacity);
@@ -349,9 +350,10 @@ fn collect_packages(resolved: &ResolvedMetadata<'_>) -> CollectedPackages {
 
 // ── Step 3: wire_edges ───────────────────────────────────────────────
 
-/// Second pass: classify each crate's deps by kind, attach normal deps as
-/// direct children, create group nodes for dev/build deps, and build the
-/// parents reverse-index.
+/// Classify each crate's deps by kind
+/// 
+/// Attaches normal deps as direct children, create group nodes for dev/build
+/// deps, and build the parents reverse-index.
 fn wire_edges(
     resolved: &ResolvedMetadata<'_>,
     pkg_index: &FxHashMap<PackageId, NodeId>,
