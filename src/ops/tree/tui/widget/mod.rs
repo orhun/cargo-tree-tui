@@ -21,6 +21,7 @@ mod lineage;
 pub mod render;
 pub mod state;
 mod style;
+mod view_cache;
 mod viewport;
 
 /// A tree widget for displaying hierarchical dependencies.

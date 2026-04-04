@@ -79,7 +79,7 @@ impl From<&Package> for Dependency {
             package
                 .manifest_path
                 .parent()
-                .map(|parent| CompactString::from(parent.as_str()))
+                .map(|parent| parent.as_str().into())
         } else {
             None
         };
@@ -92,8 +92,8 @@ impl From<&Package> for Dependency {
         });
 
         Dependency {
-            name: CompactString::from(package.name.as_str()),
-            version: CompactString::from(package.version.to_string()),
+            name: package.name.as_str().into(),
+            version: package.version.to_string().into(),
             manifest_dir,
             is_proc_macro,
             children: Vec::new(), // filled in by wire_edges
@@ -193,8 +193,8 @@ impl DependencyTree {
 
         let workspace_name = metadata
             .root_package()
-            .map(|pkg| CompactString::from(pkg.name.as_str()))
-            .unwrap_or_else(|| CompactString::from("workspace"));
+            .map(|pkg| pkg.name.as_str().into())
+            .unwrap_or_else(|| "workspace".into());
 
         let deps = build_dependency_tree(&metadata)?;
 

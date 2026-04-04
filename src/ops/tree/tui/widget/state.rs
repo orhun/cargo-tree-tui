@@ -2,6 +2,7 @@ use rustc_hash::FxHashSet;
 
 use crate::core::{DependencyNode, DependencyTree, NodeId};
 
+use super::view_cache::{ViewCache, materialize_window};
 use super::viewport::Viewport;
 
 /// Index into a flattened visible-node cache.
@@ -20,6 +21,16 @@ pub struct TreeWidgetState {
     pub open: Vec<bool>,
     /// Virtual position of the selected node in the full flattened tree.
     selected_virtual_pos: Option<usize>,
+    /// Current viewport.
+    pub viewport: Viewport,
+    /// Whether subtree sizes need recomputation.
+    subtree_dirty: bool,
+    /// Whether the visible cache needs re-materialization.
+    dirty: bool,
+    /// Materialized state for the normal (unfiltered) view.
+    normal: ViewCache,
+    /// Materialized state for the search-filtered view.
+    search: ViewCache,
     /// Nodes kept visible by the active search, indexed by node id.
     search_visible_nodes: Vec<bool>,
     /// Nodes whose crate names directly match the active search query, indexed by node id.
@@ -28,36 +39,6 @@ pub struct TreeWidgetState {
     search_visible_ids: Vec<NodeId>,
     /// Node ids whose `search_matches` bit is currently set, used for cheap resets and refinement.
     search_match_ids: Vec<NodeId>,
-    /// Current viewport.
-    pub viewport: Viewport,
-    /// Materialized window of visible nodes around the viewport.
-    visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in `visible_cache`, indexed by parent visible index.
-    visible_last_non_group_child: Vec<Option<VisIdx>>,
-    /// Materialized window of visible nodes for the active search result.
-    search_visible_cache: Vec<VisibleNode>,
-    /// Last visible non-group child per parent in `search_visible_cache`.
-    search_visible_last_non_group_child: Vec<Option<VisIdx>>,
-    /// Number of ancestor prefix nodes at the start of `visible_cache`.
-    prefix_len: usize,
-    /// Number of ancestor prefix nodes at the start of `search_visible_cache`.
-    search_prefix_len: usize,
-    /// Memoized visible-subtree sizes indexed by NodeId.
-    subtree_sizes: Vec<usize>,
-    /// Memoized search-filtered subtree sizes indexed by NodeId.
-    search_subtree_sizes: Vec<usize>,
-    /// Total number of virtual lines (sum of root subtree sizes).
-    total_virtual_lines: usize,
-    /// Total number of virtual lines for the search-filtered view.
-    search_total_virtual_lines: usize,
-    /// Whether subtree sizes need recomputation.
-    subtree_dirty: bool,
-    /// Whether the visible cache needs re-materialization.
-    dirty: bool,
-    /// Indicates sibling links / last-child map need recomputation for `visible_cache`.
-    visible_metadata_dirty: bool,
-    /// Indicates sibling links / last-child map need recomputation for `search_visible_cache`.
-    search_metadata_dirty: bool,
 }
 
 /// Visible node metadata used for navigation and rendering.
@@ -105,168 +86,20 @@ impl Default for TreeWidgetState {
     fn default() -> Self {
         Self {
             open: Vec::new(),
-            visible_last_non_group_child: Vec::new(),
             selected_virtual_pos: None,
+            viewport: Viewport::default(),
+            subtree_dirty: true,
+            dirty: true,
+            normal: ViewCache {
+                metadata_dirty: true,
+                ..ViewCache::default()
+            },
+            search: ViewCache::default(),
             search_visible_nodes: Vec::new(),
             search_matches: Vec::new(),
             search_visible_ids: Vec::new(),
             search_match_ids: Vec::new(),
-            viewport: Viewport::default(),
-            visible_cache: Vec::new(),
-            search_visible_cache: Vec::new(),
-            search_visible_last_non_group_child: Vec::new(),
-            prefix_len: 0,
-            search_prefix_len: 0,
-            subtree_sizes: Vec::new(),
-            search_subtree_sizes: Vec::new(),
-            total_virtual_lines: 0,
-            search_total_virtual_lines: 0,
-            subtree_dirty: true,
-            dirty: true,
-            visible_metadata_dirty: true,
-            search_metadata_dirty: false,
         }
-    }
-}
-
-/// Output of windowed materialization.
-struct MaterializeResult {
-    /// Materialized nodes: ancestor prefix + viewport window.
-    nodes: Vec<VisibleNode>,
-    /// Number of ancestor prefix nodes at the start.
-    prefix_len: usize,
-}
-
-struct MaterializeCtx<'a> {
-    tree: &'a DependencyTree,
-    open: &'a [bool],
-    sizes: &'a [usize],
-    filter: Option<&'a [bool]>,
-    virtual_pos: usize,
-    window_start: usize,
-    window_end: usize,
-    /// Stack of ancestors on the current DFS path: (NodeId, depth, virtual_pos).
-    ancestor_stack: Vec<(NodeId, usize, usize)>,
-    prefix_emitted: bool,
-    output: Vec<VisibleNode>,
-    prefix_len: usize,
-}
-
-impl MaterializeCtx<'_> {
-    fn materialize_node(&mut self, id: NodeId, depth: usize, parent_ancestor_idx: Option<usize>) {
-        let my_vpos = self.virtual_pos;
-        let subtree_size = self.sizes[id.0];
-
-        // Entirely before window — skip subtree
-        if my_vpos + subtree_size <= self.window_start {
-            self.virtual_pos += subtree_size;
-            return;
-        }
-
-        // Entirely past window — stop
-        if my_vpos >= self.window_end {
-            return;
-        }
-
-        // This node is in or overlaps the window.
-        self.virtual_pos += 1;
-
-        let in_window = my_vpos >= self.window_start;
-
-        if in_window {
-            // Emit ancestor prefix if this is the first in-window node.
-            if !self.prefix_emitted {
-                self.emit_ancestor_prefix();
-            }
-
-            let parent_vis_idx = if depth == 0 {
-                None
-            } else {
-                // Find the parent in the output buffer.
-                // The parent is the last ancestor_stack entry, which was either emitted
-                // as prefix or as a previous window node.
-                self.find_parent_vis_idx(parent_ancestor_idx)
-            };
-
-            self.output.push(VisibleNode {
-                id,
-                depth,
-                virtual_pos: my_vpos,
-                parent_vis_idx,
-                next_sibling: None,
-                prev_sibling: None,
-            });
-        }
-
-        // Recurse into children if open.
-        if self.open[id.0]
-            && let Some(node) = self.tree.node(id)
-        {
-            let my_ancestor_idx = self.ancestor_stack.len();
-            self.ancestor_stack.push((id, depth, my_vpos));
-
-            for &child in node.children() {
-                if self.filter.is_some_and(|f| !f[child.0]) {
-                    continue;
-                }
-                if self.virtual_pos >= self.window_end {
-                    break;
-                }
-                let child_size = self.sizes[child.0];
-                if self.virtual_pos + child_size <= self.window_start {
-                    self.virtual_pos += child_size;
-                    continue;
-                }
-                self.materialize_node(child, depth + 1, Some(my_ancestor_idx));
-            }
-
-            self.ancestor_stack.pop();
-        }
-    }
-
-    /// Emits ancestor prefix nodes for lineage/breadcrumb rendering.
-    fn emit_ancestor_prefix(&mut self) {
-        self.prefix_emitted = true;
-
-        if self.ancestor_stack.is_empty() {
-            return;
-        }
-
-        for i in 0..self.ancestor_stack.len() {
-            let (anc_id, anc_depth, anc_vpos) = self.ancestor_stack[i];
-
-            let parent_vis_idx = if anc_depth == 0 || i == 0 {
-                None
-            } else {
-                // Parent is the previous ancestor in the prefix.
-                Some(VisIdx(self.output.len() - 1))
-            };
-
-            self.output.push(VisibleNode {
-                id: anc_id,
-                depth: anc_depth,
-                virtual_pos: anc_vpos,
-                parent_vis_idx,
-                next_sibling: None,
-                prev_sibling: None,
-            });
-        }
-
-        self.prefix_len = self.output.len();
-    }
-
-    /// Finds the VisIdx of the parent node in the output buffer.
-    fn find_parent_vis_idx(&self, parent_ancestor_idx: Option<usize>) -> Option<VisIdx> {
-        let parent_ancestor_idx = parent_ancestor_idx?;
-        let (parent_id, _, parent_vpos) = self.ancestor_stack[parent_ancestor_idx];
-
-        // Search the output buffer for this parent.
-        // It's either in the prefix or was emitted as a window node.
-        // Search from the end since the parent was recently emitted.
-        self.output
-            .iter()
-            .rposition(|n| n.id == parent_id && n.virtual_pos == parent_vpos)
-            .map(VisIdx)
     }
 }
 
@@ -322,11 +155,7 @@ impl TreeWidgetState {
         for node_id in self.search_match_ids.drain(..) {
             self.search_matches[node_id.0] = false;
         }
-        self.search_visible_cache.clear();
-        self.search_visible_last_non_group_child.fill(None);
-        self.search_subtree_sizes.clear();
-        self.search_total_virtual_lines = 0;
-        self.search_prefix_len = 0;
+        self.search.clear();
         // Rematerialize the main view with the current selection.
         self.dirty = true;
     }
@@ -386,11 +215,7 @@ impl TreeWidgetState {
 
     /// Returns the last visible non-group child per parent for the active view.
     pub fn active_last_visible_non_group_child(&self) -> Option<&[Option<VisIdx>]> {
-        if self.search_visible_cache.is_empty() {
-            Some(&self.visible_last_non_group_child)
-        } else {
-            Some(&self.search_visible_last_non_group_child)
-        }
+        Some(&self.active_cache().last_non_group_child)
     }
 
     /// Moves the selection to the next visible dependency.
@@ -652,16 +477,11 @@ impl TreeWidgetState {
 
         self.ensure_node_capacity(tree);
 
-        self.total_virtual_lines =
-            compute_subtree_sizes(tree, &self.open, None, &mut self.subtree_sizes);
+        self.normal.recompute_subtree_sizes(tree, &self.open, None);
 
-        if !self.search_match_ids.is_empty() {
-            self.search_total_virtual_lines = compute_subtree_sizes(
-                tree,
-                &self.open,
-                Some(&self.search_visible_nodes),
-                &mut self.search_subtree_sizes,
-            );
+        if self.is_searching() {
+            self.search
+                .recompute_subtree_sizes(tree, &self.open, Some(&self.search_visible_nodes));
         }
 
         self.subtree_dirty = false;
@@ -680,56 +500,46 @@ impl TreeWidgetState {
 
     /// Lazily computes sibling links and last-child map for the active visible cache.
     pub fn ensure_visible_metadata(&mut self, tree: &DependencyTree) {
-        if self.visible_metadata_dirty {
-            Self::populate_sibling_links(&mut self.visible_cache);
-            Self::populate_last_non_group_child_map(
-                tree,
-                &self.visible_cache,
-                &mut self.visible_last_non_group_child,
-            );
-            self.visible_metadata_dirty = false;
-        }
-        if self.search_metadata_dirty && !self.search_visible_cache.is_empty() {
-            Self::populate_sibling_links(&mut self.search_visible_cache);
-            Self::populate_last_non_group_child_map(
-                tree,
-                &self.search_visible_cache,
-                &mut self.search_visible_last_non_group_child,
-            );
-            self.search_metadata_dirty = false;
-        }
+        self.normal.ensure_metadata(tree);
+        self.search.ensure_metadata(tree);
     }
 
     /// Returns the currently active visible slice.
     pub fn active_visible_nodes(&self) -> &[VisibleNode] {
-        if self.search_visible_cache.is_empty() {
-            &self.visible_cache
-        } else {
-            &self.search_visible_cache
-        }
+        &self.active_cache().nodes
     }
 
     /// Returns the total virtual line count for the active view.
     fn active_total_virtual_lines(&self) -> usize {
-        if !self.search_match_ids.is_empty() {
-            self.search_total_virtual_lines
-        } else {
-            self.total_virtual_lines
-        }
+        self.active_cache().total_virtual_lines
     }
 
     /// Returns the active subtree sizes slice.
     fn active_subtree_sizes(&self) -> &[usize] {
-        if !self.search_match_ids.is_empty() && !self.search_subtree_sizes.is_empty() {
-            &self.search_subtree_sizes
+        if self.is_searching() && !self.search.subtree_sizes.is_empty() {
+            &self.search.subtree_sizes
         } else {
-            &self.subtree_sizes
+            &self.normal.subtree_sizes
+        }
+    }
+
+    /// Returns whether a search filter is currently active.
+    fn is_searching(&self) -> bool {
+        !self.search_match_ids.is_empty()
+    }
+
+    /// Returns the active ViewCache (search if searching, normal otherwise).
+    fn active_cache(&self) -> &ViewCache {
+        if self.is_searching() {
+            &self.search
+        } else {
+            &self.normal
         }
     }
 
     /// Returns the active filter, if searching.
     fn active_filter(&self) -> Option<&[bool]> {
-        if !self.search_match_ids.is_empty() {
+        if self.is_searching() {
             Some(&self.search_visible_nodes)
         } else {
             None
@@ -754,10 +564,10 @@ impl TreeWidgetState {
         // Materialize enough for viewport + buffer for scrolling.
         let window_count = viewport_height * 2;
 
-        let (sizes, filter): (&[usize], Option<&[bool]>) = if !self.search_match_ids.is_empty() {
-            (&self.search_subtree_sizes, Some(&self.search_visible_nodes))
+        let (sizes, filter): (&[usize], Option<&[bool]>) = if self.is_searching() {
+            (&self.search.subtree_sizes, Some(&self.search_visible_nodes))
         } else {
-            (&self.subtree_sizes, None)
+            (&self.normal.subtree_sizes, None)
         };
 
         let result = materialize_window(
@@ -770,39 +580,29 @@ impl TreeWidgetState {
             window_count,
         );
 
-        if !self.search_match_ids.is_empty() {
-            self.search_visible_cache = result.nodes;
-            self.search_prefix_len = result.prefix_len;
-            self.search_metadata_dirty = true;
+        if self.is_searching() {
+            self.search.apply_materialization(result);
         } else {
-            self.visible_cache = result.nodes;
-            self.prefix_len = result.prefix_len;
-            self.visible_metadata_dirty = true;
+            self.normal.apply_materialization(result);
         }
     }
 
     /// Rebuilds the search view after applying new search state.
     fn rebuild_search_view(&mut self, tree: &DependencyTree) {
         if self.search_match_ids.is_empty() {
-            self.search_visible_cache.clear();
-            self.search_subtree_sizes.clear();
-            self.search_total_virtual_lines = 0;
+            self.search.clear();
             return;
         }
 
-        self.search_total_virtual_lines = compute_subtree_sizes(
-            tree,
-            &self.open,
-            Some(&self.search_visible_nodes),
-            &mut self.search_subtree_sizes,
-        );
+        self.search
+            .recompute_subtree_sizes(tree, &self.open, Some(&self.search_visible_nodes));
 
         // Clamp selection to search view bounds.
         if let Some(vpos) = self.selected_virtual_pos
-            && vpos >= self.search_total_virtual_lines
-            && self.search_total_virtual_lines > 0
+            && vpos >= self.search.total_virtual_lines
+            && self.search.total_virtual_lines > 0
         {
-            self.selected_virtual_pos = Some(self.search_total_virtual_lines - 1);
+            self.selected_virtual_pos = Some(self.search.total_virtual_lines - 1);
         }
 
         self.subtree_dirty = false;
@@ -910,48 +710,6 @@ impl TreeWidgetState {
         self.dirty = true;
         self.ensure_selection(tree);
     }
-
-    /// Records, for each parent visible position, the last visible non-group child position.
-    fn populate_last_non_group_child_map(
-        tree: &DependencyTree,
-        visible_nodes: &[VisibleNode],
-        target: &mut Vec<Option<VisIdx>>,
-    ) {
-        target.clear();
-        target.resize(visible_nodes.len(), None);
-
-        for (vis_idx, node) in visible_nodes.iter().enumerate() {
-            let Some(tree_node) = tree.node(node.id) else {
-                continue;
-            };
-
-            if tree_node.is_group() {
-                continue;
-            }
-
-            if let Some(parent_vis_idx) = node.parent_vis_idx {
-                target[parent_vis_idx.0] = Some(VisIdx(vis_idx));
-            }
-        }
-    }
-
-    /// Links each visible node to its next and previous sibling (same parent).
-    fn populate_sibling_links(visible_nodes: &mut [VisibleNode]) {
-        let mut last_child_of: Vec<Option<VisIdx>> = vec![None; visible_nodes.len()];
-
-        for i in 0..visible_nodes.len() {
-            let Some(parent) = visible_nodes[i].parent_vis_idx else {
-                continue;
-            };
-
-            let current = VisIdx(i);
-            if let Some(prev) = last_child_of[parent.0] {
-                visible_nodes[prev.0].next_sibling = Some(current);
-                visible_nodes[i].prev_sibling = Some(prev);
-            }
-            last_child_of[parent.0] = Some(current);
-        }
-    }
 }
 
 /// Finds the virtual position of the first occurrence of a `NodeId` in the virtual tree.
@@ -1009,124 +767,4 @@ fn find_vpos_recursive(
     }
 
     None
-}
-
-/// Computes memoized visible-subtree sizes for all nodes.
-///
-/// `subtree_size[id] = 1 + (if open[id]: Σ subtree_size[child])`.
-/// A `computed` guard prevents recomputing already-visited nodes (DAG memoization).
-/// An `in_progress` guard breaks hypothetical cycles by treating in-progress nodes as leaves.
-fn compute_subtree_sizes(
-    tree: &DependencyTree,
-    open: &[bool],
-    filter: Option<&[bool]>,
-    sizes: &mut Vec<usize>,
-) -> usize {
-    sizes.clear();
-    sizes.resize(tree.nodes.len(), 0);
-    let mut computed = vec![false; tree.nodes.len()];
-    let mut in_progress = vec![false; tree.nodes.len()];
-
-    let mut total = 0usize;
-    for &root in tree.roots() {
-        if filter.is_some_and(|f| !f[root.0]) {
-            continue;
-        }
-        total += compute_size_recursive(
-            tree,
-            open,
-            filter,
-            root,
-            sizes,
-            &mut computed,
-            &mut in_progress,
-        );
-    }
-    total
-}
-
-fn compute_size_recursive(
-    tree: &DependencyTree,
-    open: &[bool],
-    filter: Option<&[bool]>,
-    id: NodeId,
-    sizes: &mut [usize],
-    computed: &mut [bool],
-    in_progress: &mut [bool],
-) -> usize {
-    if in_progress[id.0] {
-        return 1; // cycle break
-    }
-    if computed[id.0] {
-        return sizes[id.0];
-    }
-
-    in_progress[id.0] = true;
-
-    let mut size: usize = 1;
-    if open[id.0]
-        && let Some(node) = tree.node(id)
-    {
-        for &child in node.children() {
-            if filter.is_some_and(|f| !f[child.0]) {
-                continue;
-            }
-            size += compute_size_recursive(tree, open, filter, child, sizes, computed, in_progress);
-        }
-    }
-
-    sizes[id.0] = size;
-    computed[id.0] = true;
-    in_progress[id.0] = false;
-    size
-}
-
-/// Materializes a window of visible nodes around a viewport range.
-///
-/// The output contains an ancestor prefix (for lineage/breadcrumb rendering)
-/// followed by the viewport window nodes. Only nodes within `[window_start, window_end)`
-/// are emitted, plus ancestors of the first emitted node.
-fn materialize_window(
-    tree: &DependencyTree,
-    open: &[bool],
-    sizes: &[usize],
-    filter: Option<&[bool]>,
-    roots: &[NodeId],
-    window_start: usize,
-    window_count: usize,
-) -> MaterializeResult {
-    let mut ctx = MaterializeCtx {
-        tree,
-        open,
-        sizes,
-        filter,
-        virtual_pos: 0,
-        window_start,
-        window_end: window_start + window_count,
-        // Ancestor stack: (NodeId, depth, virtual_pos) for nodes on the current DFS path
-        ancestor_stack: Vec::with_capacity(64),
-        prefix_emitted: false,
-        output: Vec::with_capacity(window_count + 64),
-        prefix_len: 0,
-    };
-
-    for &root in roots {
-        if filter.is_some_and(|f| !f[root.0]) {
-            continue;
-        }
-        if ctx.virtual_pos >= ctx.window_end {
-            break;
-        }
-        let root_size = sizes[root.0];
-        if ctx.virtual_pos + root_size <= ctx.window_start {
-            ctx.virtual_pos += root_size;
-            continue;
-        }
-        ctx.materialize_node(root, 0, None);
-    }
-
-    MaterializeResult {
-        nodes: ctx.output,
-        prefix_len: ctx.prefix_len,
-    }
 }
