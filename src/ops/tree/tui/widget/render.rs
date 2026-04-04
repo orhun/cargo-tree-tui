@@ -54,40 +54,64 @@ impl<'a, 's> RenderContext<'a, 's> {
     }
 
     pub fn render(&mut self, area: Rect) -> RenderOutput<'a> {
-        let Some(selected_idx) = self.state.selected_position(self.tree) else {
+        if self.state.selected_position(self.tree).is_none() {
             return RenderOutput::default();
         };
 
-        // Keep the visible list borrowed from state instead of cloning it per frame.
         self.state.ensure_visible_nodes(self.tree);
         self.state.ensure_visible_metadata(self.tree);
-        let selected_line = selected_idx.0 + 1;
-        let total_lines = self.state.active_visible_nodes().len();
 
-        let mut viewport = Viewport::new(area, self.block).center_on(selected_line, total_lines, 1);
+        let total_lines = self.state.total_lines(self.tree);
+        let selected_vpos = self.state.selected_virtual_pos();
+        let prev_offset = self.state.viewport.offset;
+        let selected_vline = selected_vpos.unwrap_or(0);
+        let mut viewport = Viewport::new(area, self.block).scroll_into_view(
+            selected_vline,
+            total_lines,
+            1,
+            prev_offset,
+        );
         self.state.update_viewport(viewport);
 
-        let context_lines = {
+        // Context lines: walk parent_vis_idx from the node at viewport.offset.min(max_offset),
+        // matching the original context bar behavior.
+        let context_vpos = viewport.offset.min(viewport.max_offset);
+        let context_lines = if context_vpos > 0 {
             let visible_nodes = self.state.active_visible_nodes();
-            self.render_context_lines(visible_nodes, viewport.offset.min(viewport.max_offset))
+            let selected_vis = self.state.selected_position_cached();
+            if let Some(context_idx) = visible_nodes
+                .iter()
+                .position(|n| n.virtual_pos == context_vpos)
+            {
+                self.render_context_lines(visible_nodes, context_idx, selected_vis)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
         };
 
         let content_height = viewport.height.saturating_sub(context_lines.len());
-
         viewport.clamp_offset(total_lines, context_lines.len());
         self.state.update_viewport(viewport);
 
-        let start_flat = viewport.offset;
+        // Render viewport rows: find nodes with virtual_pos in [viewport.offset, offset + content_height).
+        let render_start_vpos = viewport.offset;
+        let render_end_vpos = viewport.offset + content_height;
         let mut lines = Vec::with_capacity(content_height);
-        let end_flat = (start_flat + content_height).min(total_lines);
         {
             let visible_nodes = self.state.active_visible_nodes();
             let selected_vis = self.state.selected_position_cached();
-            for flat_id in start_flat..end_flat {
-                let vis = VisIdx(flat_id);
-                if visible_nodes.get(flat_id).is_some()
-                    && let Some(line) =
-                        self.render_visible_node(visible_nodes, vis, selected_vis, false)
+            for (i, vnode) in visible_nodes.iter().enumerate() {
+                if vnode.virtual_pos < render_start_vpos {
+                    continue;
+                }
+                if vnode.virtual_pos >= render_end_vpos {
+                    break;
+                }
+                let vis = VisIdx(i);
+                if let Some(line) =
+                    self.render_visible_node(visible_nodes, vis, selected_vis, false)
                 {
                     lines.push(line);
                 }
@@ -211,12 +235,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         Some(Line::from(spans))
     }
 
-    fn render_context_lines(&self, visible_nodes: &[VisibleNode], offset: usize) -> Vec<Line<'a>> {
-        if offset == 0 {
-            return Vec::new();
-        }
-
-        let Some(first_visible) = visible_nodes.get(offset) else {
+    /// Renders context lines by walking the parent chain from the first window-zone node.
+    fn render_context_lines(
+        &self,
+        visible_nodes: &[VisibleNode],
+        first_window_idx: usize,
+        selected_vis: Option<VisIdx>,
+    ) -> Vec<Line<'a>> {
+        let Some(first_visible) = visible_nodes.get(first_window_idx) else {
             return Vec::new();
         };
 
@@ -233,9 +259,7 @@ impl<'a, 's> RenderContext<'a, 's> {
             }
         }
 
-        let selected_vis = self.state.selected_position_cached();
-
-        // Render top → bottom, limited
+        // Render top → bottom.
         ancestor_vis_indices
             .into_iter()
             .rev()
