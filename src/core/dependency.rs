@@ -369,7 +369,9 @@ fn wire_edges(
         classified.populate(resolved_node, pkg_index);
 
         let mut children: Vec<NodeId> = Vec::with_capacity(
-            classified.normal.len() + classified.has_dev as usize + classified.has_build as usize,
+            classified.normal.len()
+                + classified.has_dev() as usize
+                + classified.has_build() as usize,
         );
 
         // Normal deps are direct children of the crate node.
@@ -413,8 +415,6 @@ struct ClassifiedDeps {
     normal: Vec<NodeId>,
     dev: Vec<NodeId>,
     build: Vec<NodeId>,
-    has_dev: bool,
-    has_build: bool,
 }
 
 impl ClassifiedDeps {
@@ -422,8 +422,6 @@ impl ClassifiedDeps {
         self.normal.clear();
         self.dev.clear();
         self.build.clear();
-        self.has_dev = false;
-        self.has_build = false;
     }
 
     /// Classify a resolved node's dependencies into normal, dev, and build buckets.
@@ -440,16 +438,18 @@ impl ClassifiedDeps {
 
             match dep_type {
                 Some(DependencyType::Normal) => self.normal.push(child_id),
-                Some(DependencyType::Dev) => {
-                    self.dev.push(child_id);
-                    self.has_dev = true;
-                }
-                Some(DependencyType::Build) => {
-                    self.build.push(child_id);
-                    self.has_build = true;
-                }
+                Some(DependencyType::Dev) => self.dev.push(child_id),
+                Some(DependencyType::Build) => self.build.push(child_id),
                 None => {}
             }
         }
+    }
+
+    fn has_dev(&self) -> bool {
+        !self.normal.is_empty()
+    }
+
+    fn has_build(&self) -> bool {
+        !self.build.is_empty()
     }
 }
