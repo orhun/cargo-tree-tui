@@ -13,6 +13,7 @@ anyhow = "1.0.100"
 cargo_metadata = "0.23.1"
 clap = { version = "4.5.53", features = ["derive"] }
 clap-cargo = "0.18.3"
+compact_str = "0.9"
 crossterm = "0.29.0"
 ratatui = { version = "0.30.0", features = ["layout-cache"] }
 ratatui-core = { version = "0.1.0", features = ["anstyle"] }

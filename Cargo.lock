@@ -168,6 +168,7 @@ dependencies = [
  "cargo_metadata",
  "clap",
  "clap-cargo",
+ "compact_str",
  "crossterm",
  "pretty_assertions",
  "ratatui",

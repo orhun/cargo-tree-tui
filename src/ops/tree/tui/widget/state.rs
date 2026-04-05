@@ -148,7 +148,7 @@ impl TreeWidgetState {
 
         let mut search_state = SearchState::new(tree.nodes.len());
 
-        for &node_id in tree.crate_nodes() {
+        for node_id in tree.crate_nodes() {
             let Some(DependencyNode::Crate(dependency)) = tree.node(node_id) else {
                 continue;
             };
