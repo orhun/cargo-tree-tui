@@ -2,6 +2,7 @@ use cargo_tree_tui::core::dependency::DependencyType;
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 use cargo_tree_tui::ops::tree::tui::widget::render::RenderContext;
 use cargo_tree_tui::ops::tree::tui::widget::{TreeWidget, TreeWidgetState, TreeWidgetStyle};
+use compact_str::CompactString;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -21,23 +22,21 @@ pub struct TestNode {
 
 pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     let mut arena = Vec::with_capacity(nodes.len());
-    for node in nodes {
-        let parent = node.parent.map(NodeId);
-        let children = node.children.iter().copied().map(NodeId).collect();
+    let mut parents: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
+    for (idx, node) in nodes.iter().enumerate() {
+        let children: Vec<NodeId> = node.children.iter().copied().map(NodeId).collect();
+        for child in &children {
+            parents[child.0].push(NodeId(idx));
+        }
         let node = match node.kind {
             TestNodeKind::Crate => DependencyNode::Crate(Dependency {
-                name: node.name.to_string(),
-                version: String::new(),
+                name: node.name.into(),
+                version: CompactString::const_new(""),
                 manifest_dir: None,
                 is_proc_macro: false,
-                parent,
                 children,
             }),
-            TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup {
-                kind,
-                parent,
-                children,
-            }),
+            TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup { kind, children }),
         };
         arena.push(node);
     }
@@ -49,13 +48,9 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
         .collect();
 
     DependencyTree {
-        workspace_name: "workspace".to_string(),
-        crate_nodes: arena
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
-            .collect(),
+        workspace_name: "workspace".into(),
         nodes: arena,
+        parents,
         roots,
     }
 }

@@ -1,16 +1,13 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
+use cargo_metadata::{
+    DependencyKind, Metadata, MetadataCommand, Node, Package, PackageId, TargetKind,
+};
 use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
+use compact_str::CompactString;
 use ratatui::style::Style;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
-
-/// Key type for uniquely identifying nodes in the dependency tree.
-///
-/// This consists of the [`PackageId`] and an optional parent [`NodeId`] to
-/// differentiate multiple appearances of the same package in different tree locations.
-type NodeKey = (PackageId, Option<NodeId>);
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Identifier for a node within the dependency tree arena.
 ///
@@ -27,7 +24,7 @@ pub enum DependencyType {
 }
 
 impl DependencyType {
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::Normal => "[dependencies]",
             Self::Dev => "[dev-dependencies]",
@@ -56,41 +53,58 @@ impl TryFrom<DependencyKind> for DependencyType {
     }
 }
 
-/// Flat representation of a dependency node in the tree.
+/// Flat representation of a dependency node in the deduplicated tree.
 ///
 /// See [`DependencyTree`] for the full tree structure.
 #[derive(Debug, Clone)]
 pub struct Dependency {
     /// Crate name.
-    pub name: String,
+    pub name: CompactString,
     /// Crate version.
-    pub version: String,
+    pub version: CompactString,
     /// Local manifest directory (only for workspace members).
-    pub manifest_dir: Option<String>,
+    pub manifest_dir: Option<CompactString>,
     /// Whether this crate exposes a proc-macro target.
     pub is_proc_macro: bool,
-    /// Optional parent pointer for quick upward navigation.
-    pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
     pub children: Vec<NodeId>,
 }
 
-/// Dependency group node (e.g. `[dev-dependencies]`) within the tree.
+impl From<&Package> for Dependency {
+    fn from(package: &Package) -> Self {
+        let manifest_dir = if package.source.is_none() {
+            package
+                .manifest_path
+                .parent()
+                .map(|parent| parent.as_str().into())
+        } else {
+            None
+        };
+
+        let is_proc_macro = package.targets.iter().any(|target| {
+            target
+                .kind
+                .iter()
+                .any(|kind| matches!(kind, TargetKind::ProcMacro))
+        });
+
+        Dependency {
+            name: package.name.as_str().into(),
+            version: package.version.to_string().into(),
+            manifest_dir,
+            is_proc_macro,
+            children: Vec::new(), // filled in by wire_edges
+        }
+    }
+}
+
+/// Dependency group node (e.g. `[dev-dependencies]`) within the deduplicated tree.
 #[derive(Debug, Clone)]
 pub struct DependencyGroup {
     /// Group kind in Cargo metadata.
     pub kind: DependencyType,
-    /// Optional parent pointer for quick upward navigation.
-    pub parent: Option<NodeId>,
     /// Children represented as node indices for downward traversal.
     pub children: Vec<NodeId>,
-}
-
-/// Unified dependency node type for the tree arena.
-#[derive(Debug, Clone)]
-pub enum DependencyNode {
-    Crate(Dependency),
-    Group(DependencyGroup),
 }
 
 impl DependencyGroup {
@@ -99,14 +113,14 @@ impl DependencyGroup {
     }
 }
 
-impl DependencyNode {
-    pub fn parent(&self) -> Option<NodeId> {
-        match self {
-            Self::Crate(node) => node.parent,
-            Self::Group(node) => node.parent,
-        }
-    }
+/// Unified dependency node type for the deduplicated tree arena.
+#[derive(Debug, Clone)]
+pub enum DependencyNode {
+    Crate(Dependency),
+    Group(DependencyGroup),
+}
 
+impl DependencyNode {
     pub fn children(&self) -> &[NodeId] {
         match self {
             Self::Crate(node) => &node.children,
@@ -138,29 +152,32 @@ impl DependencyNode {
             _ => None,
         }
     }
+
+    #[deprecated(note = "pre-refactor")]
+    pub fn parent(&self) -> Option<NodeId> {
+        None
+    }
 }
 
-/// Container for the resolved dependency tree scoped to the current workspace.
+/// Deduplicated dependency tree: one arena node per unique package.
 ///
-/// The tree is stored in an arena-like structure where each node references its children
-/// by their indices. This allows for efficient traversal and manipulation of the tree.
-///
-/// See also [`Dependency`].
+/// Parent relationships are stored in a separate reverse-index rather than
+/// on each node, since a deduplicated node can have multiple parents.
 #[derive(Debug, Clone)]
 pub struct DependencyTree {
     /// Name of the root package (or workspace placeholder when missing).
-    pub workspace_name: String,
+    pub workspace_name: CompactString,
     /// Arena storing all dependency nodes.
     pub nodes: Vec<DependencyNode>,
+    /// For each node, the list of parent node ids (reverse index of children).
+    pub parents: Vec<Vec<NodeId>>,
     /// Workspace members represented as node ids (entry points into the arena).
     pub roots: Vec<NodeId>,
-    /// Flat list of crate nodes for search.
-    pub crate_nodes: Vec<NodeId>,
 }
 
 impl DependencyTree {
     /// Loads Cargo metadata (optionally for a specific manifest) and converts it into a
-    /// [`DependencyTree`] with recursively resolved children.
+    /// [`DependencyTree`] with iteratively resolved children.
     pub fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
         let mut cmd = MetadataCommand::new();
 
@@ -172,62 +189,16 @@ impl DependencyTree {
 
         let workspace_name = metadata
             .root_package()
-            .map(|pkg| pkg.name.to_string())
-            .unwrap_or_else(|| "workspace".to_string());
+            .map(|pkg| pkg.name.as_str().into())
+            .unwrap_or_else(|| "workspace".into());
 
-        let resolve = metadata
-            .resolve
-            .as_ref()
-            .context("failed to resolve dependency graph")?;
-
-        // Create maps for easy lookup.
-        let package_map: HashMap<&PackageId, &Package> =
-            metadata.packages.iter().map(|pkg| (&pkg.id, pkg)).collect();
-
-        // Map of [`PackageId`] to [`Node`] for quick access during tree construction.
-        let resolve_nodes: HashMap<&PackageId, &Node> =
-            resolve.nodes.iter().map(|node| (&node.id, node)).collect();
-
-        // Main tree construction (these types will be filled in during recursion).
-        let mut nodes = Vec::new();
-        let mut roots = Vec::new();
-        let mut node_map: HashMap<NodeKey, NodeId> = HashMap::default();
-
-        // For only including packages that belong to the current workspace
-        // to avoid third-party crates.
-        let workspace_package_ids: HashSet<PackageId> = metadata
-            .workspace_members
-            .iter()
-            .cloned()
-            .collect::<HashSet<_>>();
-
-        // Recursively build dependency nodes for each workspace member.
-        for package in metadata
-            .packages
-            .iter()
-            .filter(|pkg| workspace_package_ids.contains(&pkg.id))
-        {
-            if let Some(dependency) = Self::build_dependency_node(
-                &package.id,
-                None,
-                &resolve_nodes,
-                &package_map,
-                &mut node_map,
-                &mut nodes,
-            ) {
-                roots.push(dependency);
-            }
-        }
+        let deps = build_dependency_tree(&metadata)?;
 
         Ok(DependencyTree {
             workspace_name,
-            crate_nodes: nodes
-                .iter()
-                .enumerate()
-                .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
-                .collect(),
-            nodes,
-            roots,
+            parents: deps.parents,
+            nodes: deps.nodes,
+            roots: deps.roots,
         })
     }
 
@@ -242,134 +213,212 @@ impl DependencyTree {
     }
 
     /// Returns the crate node ids that can be matched by search.
-    pub fn crate_nodes(&self) -> &[NodeId] {
-        &self.crate_nodes
+    pub fn crate_nodes(&self) -> impl Iterator<Item = NodeId> {
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
     }
+}
 
-    /// Recursively constructs dependency nodes.
-    ///
-    /// # Notes
-    ///
-    /// - Each [`NodeKey`] is stored in `node_map` to avoid duplicating nodes.
-    /// - The `parent` parameter allows tracking the parent node during recursion.
-    fn build_dependency_node(
-        package_id: &PackageId,
-        parent: Option<NodeId>,
-        resolve_nodes: &HashMap<&PackageId, &cargo_metadata::Node>,
-        package_map: &HashMap<&PackageId, &cargo_metadata::Package>,
-        node_map: &mut HashMap<(PackageId, Option<NodeId>), NodeId>,
-        nodes: &mut Vec<DependencyNode>,
-    ) -> Option<NodeId> {
-        // Avoid duplicating nodes by checking the map first.
-        let key = (package_id.clone(), parent);
-        if let Some(&existing) = node_map.get(&key) {
-            return Some(existing);
+struct BuildResult {
+    roots: Vec<NodeId>,
+    nodes: Vec<DependencyNode>,
+    parents: Vec<Vec<NodeId>>,
+}
+
+fn build_dependency_tree(metadata: &Metadata) -> Result<BuildResult> {
+    let resolved = resolve_metadata(metadata)?;
+    let mut collected = collect_packages(&resolved);
+    let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
+
+    Ok(BuildResult {
+        roots: collected.roots,
+        nodes: collected.nodes,
+        parents,
+    })
+}
+
+/// Resolved cargo metadata ready for tree construction.
+struct ResolvedMetadata<'a> {
+    packages: FxHashMap<&'a PackageId, &'a Package>,
+    resolve_nodes: FxHashMap<&'a PackageId, &'a Node>,
+    workspace_ids: Vec<PackageId>,
+}
+
+/// Validate the resolve graph and build lookup maps from cargo metadata.
+fn resolve_metadata(metadata: &Metadata) -> Result<ResolvedMetadata<'_>> {
+    let resolve = metadata
+        .resolve
+        .as_ref()
+        .context("failed to resolve dependency graph")?;
+
+    let packages = metadata.packages.iter().map(|pkg| (&pkg.id, pkg)).collect();
+
+    let resolve_nodes = resolve.nodes.iter().map(|node| (&node.id, node)).collect();
+
+    let workspace_members: FxHashSet<&PackageId> = metadata.workspace_members.iter().collect();
+    let workspace_ids = metadata
+        .packages
+        .iter()
+        .filter(|pkg| workspace_members.contains(&pkg.id))
+        .map(|pkg| pkg.id.clone())
+        .collect();
+
+    Ok(ResolvedMetadata {
+        packages,
+        resolve_nodes,
+        workspace_ids,
+    })
+}
+
+/// The node arena with empty children, a package-to-node index, and root ids.
+struct CollectedPackages {
+    nodes: Vec<DependencyNode>,
+    pkg_index: FxHashMap<PackageId, NodeId>,
+    roots: Vec<NodeId>,
+}
+
+/// Create one `DependencyNode::Crate` per reachable package.
+///
+/// DFS from workspace roots. Nodes have empty children at this point.
+fn collect_packages(resolved: &ResolvedMetadata<'_>) -> CollectedPackages {
+    let capacity = resolved.packages.len();
+    let mut remaining: Vec<&PackageId> = Vec::with_capacity(capacity);
+    remaining.extend(resolved.workspace_ids.iter());
+
+    let mut nodes: Vec<DependencyNode> = Vec::with_capacity(capacity);
+    let mut pkg_index: FxHashMap<PackageId, NodeId> =
+        FxHashMap::with_capacity_and_hasher(capacity, Default::default());
+
+    while let Some(package_id) = remaining.pop() {
+        if pkg_index.contains_key(package_id) {
+            continue;
         }
 
-        // Retrieve package information.
-        let package = *package_map.get(package_id)?;
-        let manifest_dir = if package.source.is_none() {
-            package
-                .manifest_path
-                .parent()
-                .map(|parent| parent.to_string())
-        } else {
-            None
-        };
-        let is_proc_macro = package.targets.iter().any(|target| {
-            target
-                .kind
-                .iter()
-                .any(|kind| matches!(kind, TargetKind::ProcMacro))
-        });
+        let package = resolved.packages[package_id];
 
-        // Create the new dependency node.
         let node_id = NodeId(nodes.len());
-        nodes.push(DependencyNode::Crate(Dependency {
-            name: package.name.to_string(),
-            version: package.version.to_string(),
-            manifest_dir,
-            is_proc_macro,
-            parent,
-            children: Vec::new(),
-        }));
-        node_map.insert(key, node_id);
+        nodes.push(DependencyNode::Crate(Dependency::from(package)));
+        pkg_index.insert(package_id.clone(), node_id);
 
-        // Recursively build child nodes.
-        let Some(node) = resolve_nodes.get(package_id) else {
-            return Some(node_id);
+        if let Some(node) = resolved.resolve_nodes.get(package_id) {
+            remaining.extend(node.deps.iter().map(|dep| &dep.pkg));
+        }
+    }
+
+    let roots = resolved
+        .workspace_ids
+        .iter()
+        .filter_map(|pkg_id| pkg_index.get(pkg_id).copied())
+        .collect();
+
+    CollectedPackages {
+        nodes,
+        pkg_index,
+        roots,
+    }
+}
+
+/// Classify each crate's deps by kind.
+///
+/// Attaches normal deps as direct children, creates group nodes for dev/build
+/// deps, and builds the parents reverse-index.
+fn wire_edges(
+    resolved: &ResolvedMetadata<'_>,
+    pkg_index: &FxHashMap<PackageId, NodeId>,
+    nodes: &mut Vec<DependencyNode>,
+) -> Vec<Vec<NodeId>> {
+    let mut parents: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
+
+    for (pkg_id, &node_id) in pkg_index.iter() {
+        let Some(resolved_node) = resolved.resolve_nodes.get(pkg_id) else {
+            continue;
         };
 
-        let mut normal = Vec::new();
-        let mut dev = Vec::new();
-        let mut build = Vec::new();
+        let mut classified = ClassifiedDeps::populate(resolved_node, pkg_index);
 
-        for dep in &node.deps {
+        let mut children: Vec<NodeId> = Vec::with_capacity(
+            classified.normal.len()
+                + classified.has_dev() as usize  // expanded as group, so one child
+                + classified.has_build() as usize,
+        );
+
+        // Normal deps are direct children of the crate node.
+        for &child_id in &classified.normal {
+            children.push(child_id);
+            parents[child_id.0].push(node_id);
+        }
+
+        // Dev and build deps go under group nodes.
+        for (kind, group_deps) in [
+            (DependencyType::Dev, &mut classified.dev),
+            (DependencyType::Build, &mut classified.build),
+        ] {
+            if group_deps.is_empty() {
+                continue;
+            }
+
+            let group_id = NodeId(nodes.len());
+            for &child_id in group_deps.iter() {
+                parents[child_id.0].push(group_id);
+            }
+
+            nodes.push(DependencyNode::Group(DependencyGroup {
+                kind,
+                children: std::mem::take(group_deps),
+            }));
+
+            parents.push(vec![node_id]);
+            children.push(group_id);
+        }
+
+        if let Some(DependencyNode::Crate(dep)) = nodes.get_mut(node_id.0) {
+            dep.children = children;
+        }
+    }
+
+    parents
+}
+
+#[derive(Default)]
+struct ClassifiedDeps {
+    normal: Vec<NodeId>,
+    dev: Vec<NodeId>,
+    build: Vec<NodeId>,
+}
+
+impl ClassifiedDeps {
+    /// Classify a resolved node's dependencies into normal, dev, and build buckets.
+    fn populate(resolved_node: &Node, pkg_index: &FxHashMap<PackageId, NodeId>) -> Self {
+        let mut classified = ClassifiedDeps::default();
+
+        for dep in &resolved_node.deps {
             let dep_type = dep
                 .dep_kinds
                 .iter()
                 .find_map(|kind| DependencyType::try_from(kind.kind).ok());
+
+            let Some(&child_id) = pkg_index.get(&dep.pkg) else {
+                continue;
+            };
+
             match dep_type {
-                Some(DependencyType::Normal) => normal.push(&dep.pkg),
-                Some(DependencyType::Dev) => dev.push(&dep.pkg),
-                Some(DependencyType::Build) => build.push(&dep.pkg),
+                Some(DependencyType::Normal) => classified.normal.push(child_id),
+                Some(DependencyType::Dev) => classified.dev.push(child_id),
+                Some(DependencyType::Build) => classified.build.push(child_id),
                 None => {}
             }
         }
 
-        let mut children = Vec::new();
-        for dep_id in normal {
-            if let Some(child) = Self::build_dependency_node(
-                dep_id,
-                Some(node_id),
-                resolve_nodes,
-                package_map,
-                node_map,
-                nodes,
-            ) {
-                children.push(child);
-            }
-        }
+        classified
+    }
 
-        let mut build_group = |kind: DependencyType, deps: Vec<&PackageId>| {
-            if deps.is_empty() {
-                return;
-            }
+    fn has_dev(&self) -> bool {
+        !self.dev.is_empty()
+    }
 
-            let group_id = NodeId(nodes.len());
-            nodes.push(DependencyNode::Group(DependencyGroup {
-                kind,
-                parent: Some(node_id),
-                children: Vec::new(),
-            }));
-            children.push(group_id);
-
-            let children = deps
-                .into_iter()
-                .filter_map(|dep_id| {
-                    Self::build_dependency_node(
-                        dep_id,
-                        Some(group_id),
-                        resolve_nodes,
-                        package_map,
-                        node_map,
-                        nodes,
-                    )
-                })
-                .collect();
-
-            if let Some(DependencyNode::Group(group)) = nodes.get_mut(group_id.0) {
-                group.children = children;
-            }
-        };
-
-        build_group(DependencyType::Dev, dev);
-        build_group(DependencyType::Build, build);
-
-        if let Some(DependencyNode::Crate(dependency)) = nodes.get_mut(node_id.0) {
-            dependency.children = children;
-        }
-
-        Some(node_id)
+    fn has_build(&self) -> bool {
+        !self.build.is_empty()
     }
 }

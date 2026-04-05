@@ -233,7 +233,7 @@ fn format_suffixes<'a>(node: &Dependency, style: &TreeWidgetStyle) -> Option<Vec
     }
 
     if node.is_proc_macro {
-        suffixes.push("proc-macro".to_string());
+        suffixes.push("proc-macro".into());
     }
 
     if suffixes.is_empty() {
