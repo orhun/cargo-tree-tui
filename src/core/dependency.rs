@@ -1,7 +1,17 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{DependencyKind, MetadataCommand, Node, Package, PackageId, TargetKind};
+use cargo::{
+    GlobalContext,
+    core::{
+        Package, PackageId, Workspace,
+        compiler::{CompileKind, CompileKindFallback, RustcTargetData},
+        dependency::DepKind,
+        resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
+    },
+    ops,
+    util::important_paths::find_root_manifest_for_wd,
+};
 use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
 use ratatui::style::Style;
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
@@ -44,14 +54,14 @@ impl DependencyType {
     }
 }
 
-impl TryFrom<DependencyKind> for DependencyType {
+impl TryFrom<DepKind> for DependencyType {
     type Error = ();
-    fn try_from(value: DependencyKind) -> Result<Self, Self::Error> {
+
+    fn try_from(value: DepKind) -> Result<Self, Self::Error> {
         match value {
-            DependencyKind::Normal => Ok(Self::Normal),
-            DependencyKind::Development => Ok(Self::Dev),
-            DependencyKind::Build => Ok(Self::Build),
-            _ => Err(()),
+            DepKind::Normal => Ok(Self::Normal),
+            DepKind::Development => Ok(Self::Dev),
+            DepKind::Build => Ok(Self::Build),
         }
     }
 }
@@ -159,67 +169,66 @@ pub struct DependencyTree {
 }
 
 impl DependencyTree {
-    /// Loads Cargo metadata (optionally for a specific manifest) and converts it into a
+    /// Loads Cargo workspace information (optionally for a specific manifest) and converts it into a
     /// [`DependencyTree`] with recursively resolved children.
     pub fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
-        let mut cmd = MetadataCommand::new();
+        let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
+        let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
+        let ws = Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
+        let requested_kinds = CompileKind::from_requested_targets_with_fallback(
+            ws.gctx(),
+            &[],
+            CompileKindFallback::JustHost,
+        )
+        .context("failed to determine Cargo target kinds")?;
+        let mut target_data =
+            RustcTargetData::new(&ws, &requested_kinds).context("failed to load target data")?;
+        let specs = ops::Packages::All(Vec::new())
+            .to_package_id_specs(&ws)
+            .context("failed to resolve workspace package specs")?;
+        let ws_resolve = ops::resolve_ws_with_opts(
+            &ws,
+            &mut target_data,
+            &requested_kinds,
+            &CliFeatures::new_all(true),
+            &specs,
+            HasDevUnits::Yes,
+            ForceAllTargets::Yes,
+            false,
+        )
+        .context("failed to resolve Cargo dependencies")?;
+        let pkg_set = ws_resolve.pkg_set;
+        let resolve = ws_resolve.targeted_resolve;
 
-        if let Some(path) = manifest_path {
-            cmd.manifest_path(path);
-        }
-
-        let metadata = cmd.exec().context("failed to execute Cargo metadata")?;
-
-        let workspace_name = metadata
-            .root_package()
-            .map(|pkg| pkg.name.to_string())
+        let workspace_name = ws
+            .current_opt()
+            .map(|pkg| pkg.name().to_string())
             .unwrap_or_else(|| "workspace".to_string());
 
-        let resolve = metadata
-            .resolve
-            .as_ref()
-            .context("failed to resolve dependency graph")?;
+        let mut package_map: HashMap<PackageId, &Package> =
+            ws.members().map(|pkg| (pkg.package_id(), pkg)).collect();
+        package_map.extend(pkg_set.packages().map(|pkg| (pkg.package_id(), pkg)));
 
-        // Create maps for easy lookup.
-        let package_map: HashMap<&PackageId, &Package> =
-            metadata.packages.iter().map(|pkg| (&pkg.id, pkg)).collect();
-
-        // Map of [`PackageId`] to [`Node`] for quick access during tree construction.
-        let resolve_nodes: HashMap<&PackageId, &Node> =
-            resolve.nodes.iter().map(|node| (&node.id, node)).collect();
-
-        // Main tree construction (these types will be filled in during recursion).
         let mut nodes = Vec::new();
         let mut roots = Vec::new();
         let mut node_map: HashMap<NodeKey, NodeId> = HashMap::default();
 
-        // For only including packages that belong to the current workspace
-        // to avoid third-party crates.
-        let workspace_package_ids: HashSet<PackageId> = metadata
-            .workspace_members
-            .iter()
-            .cloned()
-            .collect::<HashSet<_>>();
-
-        // Recursively build dependency nodes for each workspace member.
-        for package in metadata
-            .packages
-            .iter()
-            .filter(|pkg| workspace_package_ids.contains(&pkg.id))
-        {
+        for package in ws.members() {
+            let mut ancestors = HashSet::default();
             if let Some(dependency) = Self::build_dependency_node(
-                &package.id,
+                package.package_id(),
                 None,
-                &resolve_nodes,
+                &resolve,
                 &package_map,
                 &mut node_map,
                 &mut nodes,
+                &mut ancestors,
             ) {
                 roots.push(dependency);
             }
         }
 
-        Ok(DependencyTree {
+        Ok(Self {
             workspace_name,
             crate_nodes: nodes
                 .iter()
@@ -253,85 +262,69 @@ impl DependencyTree {
     /// - Each [`NodeKey`] is stored in `node_map` to avoid duplicating nodes.
     /// - The `parent` parameter allows tracking the parent node during recursion.
     fn build_dependency_node(
-        package_id: &PackageId,
+        package_id: PackageId,
         parent: Option<NodeId>,
-        resolve_nodes: &HashMap<&PackageId, &cargo_metadata::Node>,
-        package_map: &HashMap<&PackageId, &cargo_metadata::Package>,
-        node_map: &mut HashMap<(PackageId, Option<NodeId>), NodeId>,
+        resolve: &cargo::core::Resolve,
+        package_map: &HashMap<PackageId, &Package>,
+        node_map: &mut HashMap<NodeKey, NodeId>,
         nodes: &mut Vec<DependencyNode>,
+        ancestors: &mut HashSet<PackageId>,
     ) -> Option<NodeId> {
-        // Avoid duplicating nodes by checking the map first.
-        let key = (package_id.clone(), parent);
+        debug_assert!(!ancestors.contains(&package_id));
+
+        let key = (package_id, parent);
         if let Some(&existing) = node_map.get(&key) {
             return Some(existing);
         }
 
-        // Retrieve package information.
-        let package = *package_map.get(package_id)?;
-        let manifest_dir = if package.source.is_none() {
-            package
-                .manifest_path
-                .parent()
-                .map(|parent| parent.to_string())
-        } else {
-            None
-        };
-        let is_proc_macro = package.targets.iter().any(|target| {
-            target
-                .kind
-                .iter()
-                .any(|kind| matches!(kind, TargetKind::ProcMacro))
-        });
-
-        // Create the new dependency node.
-        let node_id = NodeId(nodes.len());
-        nodes.push(DependencyNode::Crate(Dependency {
-            name: package.name.to_string(),
-            version: package.version.to_string(),
-            manifest_dir,
-            is_proc_macro,
-            parent,
-            children: Vec::new(),
-        }));
-        node_map.insert(key, node_id);
-
-        // Recursively build child nodes.
-        let Some(node) = resolve_nodes.get(package_id) else {
-            return Some(node_id);
-        };
+        let node_id = Self::push_crate_node(package_id, parent, package_map, node_map, nodes)?;
+        ancestors.insert(package_id);
 
         let mut normal = Vec::new();
         let mut dev = Vec::new();
         let mut build = Vec::new();
 
-        for dep in &node.deps {
-            let dep_type = dep
-                .dep_kinds
-                .iter()
-                .find_map(|kind| DependencyType::try_from(kind.kind).ok());
-            match dep_type {
-                Some(DependencyType::Normal) => normal.push(&dep.pkg),
-                Some(DependencyType::Dev) => dev.push(&dep.pkg),
-                Some(DependencyType::Build) => build.push(&dep.pkg),
-                None => {}
+        for (dep_id, deps) in resolve.deps(package_id) {
+            let mut seen_kinds = HashSet::default();
+            for dep in deps.iter() {
+                let Ok(dep_type) = DependencyType::try_from(dep.kind()) else {
+                    continue;
+                };
+
+                if !seen_kinds.insert(dep_type) {
+                    continue;
+                }
+
+                match dep_type {
+                    DependencyType::Normal => normal.push(dep_id),
+                    DependencyType::Dev => dev.push(dep_id),
+                    DependencyType::Build => build.push(dep_id),
+                }
             }
         }
 
         let mut children = Vec::new();
         for dep_id in normal {
-            if let Some(child) = Self::build_dependency_node(
-                dep_id,
-                Some(node_id),
-                resolve_nodes,
-                package_map,
-                node_map,
-                nodes,
-            ) {
+            let child = if ancestors.contains(&dep_id) {
+                Self::push_crate_node(dep_id, Some(node_id), package_map, node_map, nodes)
+            } else {
+                Self::build_dependency_node(
+                    dep_id,
+                    Some(node_id),
+                    resolve,
+                    package_map,
+                    node_map,
+                    nodes,
+                    ancestors,
+                )
+            };
+
+            if let Some(child) = child {
                 children.push(child);
             }
         }
 
-        let mut build_group = |kind: DependencyType, deps: Vec<&PackageId>| {
+        let mut build_group = |kind: DependencyType, deps: Vec<PackageId>| {
             if deps.is_empty() {
                 return;
             }
@@ -344,32 +337,79 @@ impl DependencyTree {
             }));
             children.push(group_id);
 
-            let children = deps
+            let group_children = deps
                 .into_iter()
                 .filter_map(|dep_id| {
-                    Self::build_dependency_node(
-                        dep_id,
-                        Some(group_id),
-                        resolve_nodes,
-                        package_map,
-                        node_map,
-                        nodes,
-                    )
+                    if ancestors.contains(&dep_id) {
+                        Self::push_crate_node(dep_id, Some(group_id), package_map, node_map, nodes)
+                    } else {
+                        Self::build_dependency_node(
+                            dep_id,
+                            Some(group_id),
+                            resolve,
+                            package_map,
+                            node_map,
+                            nodes,
+                            ancestors,
+                        )
+                    }
                 })
                 .collect();
 
             if let Some(DependencyNode::Group(group)) = nodes.get_mut(group_id.0) {
-                group.children = children;
+                group.children = group_children;
             }
         };
 
         build_group(DependencyType::Dev, dev);
         build_group(DependencyType::Build, build);
 
+        ancestors.remove(&package_id);
         if let Some(DependencyNode::Crate(dependency)) = nodes.get_mut(node_id.0) {
             dependency.children = children;
         }
 
         Some(node_id)
+    }
+
+    fn push_crate_node(
+        package_id: PackageId,
+        parent: Option<NodeId>,
+        package_map: &HashMap<PackageId, &Package>,
+        node_map: &mut HashMap<NodeKey, NodeId>,
+        nodes: &mut Vec<DependencyNode>,
+    ) -> Option<NodeId> {
+        let key = (package_id, parent);
+        if let Some(&existing) = node_map.get(&key) {
+            return Some(existing);
+        }
+
+        let package = *package_map.get(&package_id)?;
+        let manifest_dir = package
+            .package_id()
+            .source_id()
+            .is_path()
+            .then(|| package.root().display().to_string());
+        let is_proc_macro = package.proc_macro();
+
+        let node_id = NodeId(nodes.len());
+        nodes.push(DependencyNode::Crate(Dependency {
+            name: package.name().to_string(),
+            version: package.version().to_string(),
+            manifest_dir,
+            is_proc_macro,
+            parent,
+            children: Vec::new(),
+        }));
+        node_map.insert(key, node_id);
+        Some(node_id)
+    }
+}
+
+fn resolve_manifest_path(gctx: &GlobalContext, manifest_path: Option<PathBuf>) -> Result<PathBuf> {
+    match manifest_path {
+        Some(path) if path.is_absolute() => Ok(path),
+        Some(path) => Ok(gctx.cwd().join(path)),
+        None => find_root_manifest_for_wd(gctx.cwd()).context("failed to find Cargo.toml"),
     }
 }
