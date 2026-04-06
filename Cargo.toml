@@ -10,7 +10,8 @@ path = "src/bin/cargo/main.rs"
 
 [dependencies]
 anyhow = "1.0.100"
-cargo_metadata = "0.23.1"
+cargo = "=0.95.0"
+cargo-util = "0.2.27"
 clap = { version = "4.5.53", features = ["derive"] }
 clap-cargo = "0.18.3"
 compact_str = "0.9"

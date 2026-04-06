@@ -1,13 +1,22 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use cargo_metadata::{
-    DependencyKind, Metadata, MetadataCommand, Node, Package, PackageId, TargetKind,
+use cargo::{
+    GlobalContext,
+    core::{
+        Package, PackageId, Workspace,
+        compiler::{CompileKind, CompileKindFallback, RustcTargetData},
+        dependency::DepKind,
+        resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
+    },
+    ops,
+    util::important_paths::find_root_manifest_for_wd,
 };
+use cargo_util::paths::normalize_path;
 use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
 use compact_str::CompactString;
 use ratatui::style::Style;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 
 /// Identifier for a node within the dependency tree arena.
 ///
@@ -41,14 +50,12 @@ impl DependencyType {
     }
 }
 
-impl TryFrom<DependencyKind> for DependencyType {
-    type Error = ();
-    fn try_from(value: DependencyKind) -> Result<Self, Self::Error> {
+impl From<DepKind> for DependencyType {
+    fn from(value: DepKind) -> Self {
         match value {
-            DependencyKind::Normal => Ok(Self::Normal),
-            DependencyKind::Development => Ok(Self::Dev),
-            DependencyKind::Build => Ok(Self::Build),
-            _ => Err(()),
+            DepKind::Normal => Self::Normal,
+            DepKind::Development => Self::Dev,
+            DepKind::Build => Self::Build,
         }
     }
 }
@@ -70,29 +77,13 @@ pub struct Dependency {
     pub children: Vec<NodeId>,
 }
 
-impl From<&Package> for Dependency {
-    fn from(package: &Package) -> Self {
-        let manifest_dir = if package.source.is_none() {
-            package
-                .manifest_path
-                .parent()
-                .map(|parent| parent.as_str().into())
-        } else {
-            None
-        };
-
-        let is_proc_macro = package.targets.iter().any(|target| {
-            target
-                .kind
-                .iter()
-                .any(|kind| matches!(kind, TargetKind::ProcMacro))
-        });
-
+impl From<&PackageSnapshot> for Dependency {
+    fn from(snapshot: &PackageSnapshot) -> Self {
         Dependency {
-            name: package.name.as_str().into(),
-            version: package.version.to_string().into(),
-            manifest_dir,
-            is_proc_macro,
+            name: snapshot.name.clone(),
+            version: snapshot.version.clone(),
+            manifest_dir: snapshot.manifest_dir.clone(),
+            is_proc_macro: snapshot.is_proc_macro,
             children: Vec::new(), // filled in by wire_edges
         }
     }
@@ -171,23 +162,12 @@ pub struct DependencyTree {
 }
 
 impl DependencyTree {
-    /// Loads Cargo metadata (optionally for a specific manifest) and converts it into a
-    /// [`DependencyTree`] with iteratively resolved children.
+    /// Resolves the Cargo workspace via the `cargo` library and converts the
+    /// resolved graph into a [`DependencyTree`].
     pub fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
-        let mut cmd = MetadataCommand::new();
-
-        if let Some(path) = manifest_path {
-            cmd.manifest_path(path);
-        }
-
-        let metadata = cmd.exec().context("failed to execute Cargo metadata")?;
-
-        let workspace_name = metadata
-            .root_package()
-            .map(|pkg| pkg.name.as_str().into())
-            .unwrap_or_else(|| "workspace".into());
-
-        let deps = build_dependency_tree(&metadata)?;
+        let resolved = ResolvedWorkspace::load(manifest_path)?;
+        let workspace_name = resolved.workspace_name.clone();
+        let deps = build_dependency_tree(&resolved);
 
         Ok(DependencyTree {
             workspace_name,
@@ -216,55 +196,153 @@ impl DependencyTree {
     }
 }
 
+/// Snapshot of a Cargo package with the fields required fields.
+pub struct PackageSnapshot {
+    name: CompactString,
+    version: CompactString,
+    manifest_dir: Option<CompactString>,
+    is_proc_macro: bool,
+}
+
+impl PackageSnapshot {
+    fn from_package(package: &Package) -> Self {
+        let manifest_dir = package
+            .package_id()
+            .source_id()
+            .is_path()
+            .then(|| package.root().display().to_string().into());
+
+        Self {
+            name: package.name().as_str().into(),
+            version: package.version().to_string().into(),
+            manifest_dir,
+            is_proc_macro: package.proc_macro(),
+        }
+    }
+}
+
+/// Resolved Cargo workspace with the data required to build the dependency tree.
+struct ResolvedWorkspace {
+    workspace_name: CompactString,
+    packages: FxHashMap<PackageId, PackageSnapshot>,
+    /// Deduplicated, classified outgoing edges keyed by source package.
+    edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
+    workspace_ids: Vec<PackageId>,
+}
+
+impl ResolvedWorkspace {
+    fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
+        let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
+        let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
+        let ws = Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
+
+        let requested_kinds = CompileKind::from_requested_targets_with_fallback(
+            ws.gctx(),
+            &[],
+            CompileKindFallback::JustHost,
+        )
+        .context("failed to determine Cargo target kinds")?;
+        let mut target_data =
+            RustcTargetData::new(&ws, &requested_kinds).context("failed to load target data")?;
+        let specs = ops::Packages::All(Vec::new())
+            .to_package_id_specs(&ws)
+            .context("failed to resolve workspace package specs")?;
+        let ws_resolve = ops::resolve_ws_with_opts(
+            &ws,
+            &mut target_data,
+            &requested_kinds,
+            &CliFeatures::new_all(true),
+            &specs,
+            HasDevUnits::Yes,
+            ForceAllTargets::Yes,
+            false,
+        )
+        .context("failed to resolve Cargo dependencies")?;
+
+        let pkg_set = ws_resolve.pkg_set;
+        let resolve = ws_resolve.targeted_resolve;
+
+        let workspace_name = ws
+            .current_opt()
+            .map(|pkg| pkg.name().as_str().into())
+            .unwrap_or_else(|| "workspace".into());
+
+        // Snapshot every reachable package: workspace members first (so a
+        // member that also appears in pkg_set keeps its workspace identity),
+        // then everything else from the resolved package set.
+        let mut packages: FxHashMap<PackageId, PackageSnapshot> = FxHashMap::default();
+        for pkg in ws.members() {
+            packages.insert(pkg.package_id(), PackageSnapshot::from_package(pkg));
+        }
+        for pkg in pkg_set.packages() {
+            packages
+                .entry(pkg.package_id())
+                .or_insert_with(|| PackageSnapshot::from_package(pkg));
+        }
+
+        // Build classified, kind-deduplicated edges keyed by source package.
+        let mut edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>> =
+            FxHashMap::default();
+        for &pkg_id in packages.keys() {
+            let mut classified: Vec<(PackageId, DependencyType)> = Vec::new();
+            for (dep_id, deps) in resolve.deps(pkg_id) {
+                let mut seen_normal = false;
+                let mut seen_dev = false;
+                let mut seen_build = false;
+                for dep in deps.iter() {
+                    let kind = DependencyType::from(dep.kind());
+                    let already = match kind {
+                        DependencyType::Normal => std::mem::replace(&mut seen_normal, true),
+                        DependencyType::Dev => std::mem::replace(&mut seen_dev, true),
+                        DependencyType::Build => std::mem::replace(&mut seen_build, true),
+                    };
+                    if !already {
+                        classified.push((dep_id, kind));
+                    }
+                }
+            }
+            edges.insert(pkg_id, classified);
+        }
+
+        let workspace_ids = ws.members().map(|pkg| pkg.package_id()).collect();
+
+        Ok(ResolvedWorkspace {
+            workspace_name,
+            packages,
+            edges,
+            workspace_ids,
+        })
+    }
+}
+
+fn resolve_manifest_path(gctx: &GlobalContext, manifest_path: Option<PathBuf>) -> Result<PathBuf> {
+    let raw = match manifest_path {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => gctx.cwd().join(path),
+        None => find_root_manifest_for_wd(gctx.cwd()).context("failed to find Cargo.toml")?,
+    };
+    // Cargo's `Workspace::new` compares manifest paths against the normalized
+    // paths it discovers via filesystem walks. Without lexical normalization,
+    // an input like `../zed/Cargo.toml` produces `.../cwd/../zed/Cargo.toml`
+    // and trips `validate_members` with a "wrong workspace" error.
+    Ok(normalize_path(&raw))
+}
+
 struct BuildResult {
     roots: Vec<NodeId>,
     nodes: Vec<DependencyNode>,
     parents: Vec<Vec<NodeId>>,
 }
 
-fn build_dependency_tree(metadata: &Metadata) -> Result<BuildResult> {
-    let resolved = resolve_metadata(metadata)?;
-    let mut collected = collect_packages(&resolved);
-    let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
+fn build_dependency_tree(resolved: &ResolvedWorkspace) -> BuildResult {
+    let mut collected = collect_packages(resolved);
+    let parents = wire_edges(resolved, &collected.pkg_index, &mut collected.nodes);
 
-    Ok(BuildResult {
+    BuildResult {
         roots: collected.roots,
         nodes: collected.nodes,
         parents,
-    })
-}
-
-/// Resolved cargo metadata ready for tree construction.
-struct ResolvedMetadata<'a> {
-    packages: FxHashMap<&'a PackageId, &'a Package>,
-    resolve_nodes: FxHashMap<&'a PackageId, &'a Node>,
-    workspace_ids: Vec<PackageId>,
-}
-
-/// Validate the resolve graph and build lookup maps from cargo metadata.
-fn resolve_metadata(metadata: &Metadata) -> Result<ResolvedMetadata<'_>> {
-    let resolve = metadata
-        .resolve
-        .as_ref()
-        .context("failed to resolve dependency graph")?;
-
-    let packages = metadata.packages.iter().map(|pkg| (&pkg.id, pkg)).collect();
-
-    let resolve_nodes = resolve.nodes.iter().map(|node| (&node.id, node)).collect();
-
-    let workspace_members: FxHashSet<&PackageId> = metadata.workspace_members.iter().collect();
-    let workspace_ids = metadata
-        .packages
-        .iter()
-        .filter(|pkg| workspace_members.contains(&pkg.id))
-        .map(|pkg| pkg.id.clone())
-        .collect();
-
-    Ok(ResolvedMetadata {
-        packages,
-        resolve_nodes,
-        workspace_ids,
-    })
+    }
 }
 
 /// The node arena with empty children, a package-to-node index, and root ids.
@@ -277,28 +355,30 @@ struct CollectedPackages {
 /// Create one `DependencyNode::Crate` per reachable package.
 ///
 /// DFS from workspace roots. Nodes have empty children at this point.
-fn collect_packages(resolved: &ResolvedMetadata<'_>) -> CollectedPackages {
+fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
     let capacity = resolved.packages.len();
-    let mut remaining: Vec<&PackageId> = Vec::with_capacity(capacity);
-    remaining.extend(resolved.workspace_ids.iter());
+    let mut remaining: Vec<PackageId> = Vec::with_capacity(capacity);
+    remaining.extend(resolved.workspace_ids.iter().copied());
 
     let mut nodes: Vec<DependencyNode> = Vec::with_capacity(capacity);
     let mut pkg_index: FxHashMap<PackageId, NodeId> =
         FxHashMap::with_capacity_and_hasher(capacity, Default::default());
 
     while let Some(package_id) = remaining.pop() {
-        if pkg_index.contains_key(package_id) {
+        if pkg_index.contains_key(&package_id) {
             continue;
         }
 
-        let package = resolved.packages[package_id];
+        let Some(snapshot) = resolved.packages.get(&package_id) else {
+            continue;
+        };
 
         let node_id = NodeId(nodes.len());
-        nodes.push(DependencyNode::Crate(Dependency::from(package)));
-        pkg_index.insert(package_id.clone(), node_id);
+        nodes.push(DependencyNode::Crate(Dependency::from(snapshot)));
+        pkg_index.insert(package_id, node_id);
 
-        if let Some(node) = resolved.resolve_nodes.get(package_id) {
-            remaining.extend(node.deps.iter().map(|dep| &dep.pkg));
+        if let Some(deps) = resolved.edges.get(&package_id) {
+            remaining.extend(deps.iter().map(|(dep_id, _)| *dep_id));
         }
     }
 
@@ -320,19 +400,18 @@ fn collect_packages(resolved: &ResolvedMetadata<'_>) -> CollectedPackages {
 /// Attaches normal deps as direct children, creates group nodes for dev/build
 /// deps, and builds the parents reverse-index.
 fn wire_edges(
-    resolved: &ResolvedMetadata<'_>,
+    resolved: &ResolvedWorkspace,
     pkg_index: &FxHashMap<PackageId, NodeId>,
     nodes: &mut Vec<DependencyNode>,
 ) -> Vec<Vec<NodeId>> {
     let mut parents: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
 
     for (pkg_id, &node_id) in pkg_index.iter() {
-        let Some(resolved_node) = resolved.resolve_nodes.get(pkg_id) else {
+        let Some(edges) = resolved.edges.get(pkg_id) else {
             continue;
         };
 
-        let mut classified = ClassifiedDeps::populate(resolved_node, pkg_index);
-
+        let mut classified = ClassifiedDeps::populate(edges, pkg_index);
         let mut children: Vec<NodeId> = Vec::with_capacity(
             classified.normal.len()
                 + classified.has_dev() as usize  // expanded as group, so one child
@@ -384,25 +463,22 @@ struct ClassifiedDeps {
 }
 
 impl ClassifiedDeps {
-    /// Classify a resolved node's dependencies into normal, dev, and build buckets.
-    fn populate(resolved_node: &Node, pkg_index: &FxHashMap<PackageId, NodeId>) -> Self {
+    /// Classify a package's edges into normal, dev, and build buckets.
+    fn populate(
+        edges: &[(PackageId, DependencyType)],
+        pkg_index: &FxHashMap<PackageId, NodeId>,
+    ) -> Self {
         let mut classified = ClassifiedDeps::default();
 
-        for dep in &resolved_node.deps {
-            let dep_type = dep
-                .dep_kinds
-                .iter()
-                .find_map(|kind| DependencyType::try_from(kind.kind).ok());
-
-            let Some(&child_id) = pkg_index.get(&dep.pkg) else {
+        for &(dep_id, kind) in edges {
+            let Some(&child_id) = pkg_index.get(&dep_id) else {
                 continue;
             };
 
-            match dep_type {
-                Some(DependencyType::Normal) => classified.normal.push(child_id),
-                Some(DependencyType::Dev) => classified.dev.push(child_id),
-                Some(DependencyType::Build) => classified.build.push(child_id),
-                None => {}
+            match kind {
+                DependencyType::Normal => classified.normal.push(child_id),
+                DependencyType::Dev => classified.dev.push(child_id),
+                DependencyType::Build => classified.build.push(child_id),
             }
         }
 
