@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use cargo_metadata::DependencyKind;
+use cargo::core::dependency::DepKind;
 use cargo_tree_tui::core::dependency::DependencyType;
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 
@@ -301,24 +301,16 @@ fn display_name_for_crate_and_group() {
 }
 
 #[test]
-fn dependency_type_from_dependency_kind() {
+fn dependency_type_from_dep_kind() {
     assert_eq!(
-        DependencyType::try_from(DependencyKind::Normal),
-        Ok(DependencyType::Normal)
+        DependencyType::from(DepKind::Normal),
+        DependencyType::Normal
     );
     assert_eq!(
-        DependencyType::try_from(DependencyKind::Development),
-        Ok(DependencyType::Dev)
+        DependencyType::from(DepKind::Development),
+        DependencyType::Dev
     );
-    assert_eq!(
-        DependencyType::try_from(DependencyKind::Build),
-        Ok(DependencyType::Build)
-    );
-}
-
-#[test]
-fn dependency_type_unknown_kind_is_err() {
-    assert!(DependencyType::try_from(DependencyKind::Unknown).is_err());
+    assert_eq!(DependencyType::from(DepKind::Build), DependencyType::Build);
 }
 
 #[test]
