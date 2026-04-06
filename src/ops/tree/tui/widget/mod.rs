@@ -12,7 +12,7 @@ use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
 pub use self::{
     render::RenderOutput,
-    state::{SearchState, TreeWidgetState},
+    state::{SearchState, TreeWidgetState, VisIdx},
     style::TreeWidgetStyle,
 };
 
@@ -21,6 +21,7 @@ mod lineage;
 pub mod render;
 pub mod state;
 mod style;
+mod view_cache;
 mod viewport;
 
 /// A tree widget for displaying hierarchical dependencies.

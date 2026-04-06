@@ -2,7 +2,6 @@ use cargo_tree_tui::core::dependency::DependencyType;
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 use cargo_tree_tui::ops::tree::tui::widget::render::RenderContext;
 use cargo_tree_tui::ops::tree::tui::widget::{TreeWidget, TreeWidgetState, TreeWidgetStyle};
-use compact_str::CompactString;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -22,16 +21,12 @@ pub struct TestNode {
 
 pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     let mut arena = Vec::with_capacity(nodes.len());
-    let mut parents: Vec<Vec<NodeId>> = vec![Vec::new(); nodes.len()];
-    for (idx, node) in nodes.iter().enumerate() {
-        let children: Vec<NodeId> = node.children.iter().copied().map(NodeId).collect();
-        for child in &children {
-            parents[child.0].push(NodeId(idx));
-        }
+    for node in nodes {
+        let children = node.children.iter().copied().map(NodeId).collect();
         let node = match node.kind {
             TestNodeKind::Crate => DependencyNode::Crate(Dependency {
                 name: node.name.into(),
-                version: CompactString::const_new(""),
+                version: "".into(),
                 manifest_dir: None,
                 is_proc_macro: false,
                 children,
@@ -47,10 +42,19 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
         .filter_map(|(idx, node)| node.parent.is_none().then_some(NodeId(idx)))
         .collect();
 
+    // Build reverse parent map from children lists.
+    let mut parents = vec![Vec::new(); arena.len()];
+    for (idx, node) in arena.iter().enumerate() {
+        let parent_id = NodeId(idx);
+        for &child_id in node.children() {
+            parents[child_id.0].push(parent_id);
+        }
+    }
+
     DependencyTree {
         workspace_name: "workspace".into(),
-        nodes: arena,
         parents,
+        nodes: arena,
         roots,
     }
 }
