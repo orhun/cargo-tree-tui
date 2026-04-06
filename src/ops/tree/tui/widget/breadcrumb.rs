@@ -40,20 +40,25 @@ impl<'a> Breadcrumb<'a> {
     /// Collect the breadcrumb trail from root to the selected node.
     fn collect_crumbs(&self) -> Vec<Crumb> {
         let mut crumbs = Vec::new();
-        let mut current = self.state.selected;
+        // Walk the visible cache via parent_vis_idx for correct position-aware breadcrumbs.
+        let visible = self.state.active_visible_nodes();
+        let mut current_vis = self.state.selected_position_cached();
 
-        while let Some(id) = current {
-            if let Some(node) = self.tree.node(id) {
-                let group_style = node.as_group().map(|group| group.kind.style());
-                crumbs.push(Crumb {
-                    name: node.display_name().to_string(),
-                    group_style,
-                    is_group: node.is_group(),
-                });
-                current = node.parent();
-            } else {
+        while let Some(vis_idx) = current_vis {
+            let Some(vnode) = visible.get(vis_idx.0) else {
                 break;
-            }
+            };
+            let Some(node) = self.tree.node(vnode.id) else {
+                break;
+            };
+
+            let group_style = node.as_group().map(|group| group.kind.style());
+            crumbs.push(Crumb {
+                name: node.display_name().to_string(),
+                group_style,
+                is_group: node.is_group(),
+            });
+            current_vis = vnode.parent_vis_idx;
         }
 
         crumbs.reverse();

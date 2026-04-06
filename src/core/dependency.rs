@@ -152,11 +152,6 @@ impl DependencyNode {
             _ => None,
         }
     }
-
-    #[deprecated(note = "pre-refactor")]
-    pub fn parent(&self) -> Option<NodeId> {
-        None
-    }
 }
 
 /// Deduplicated dependency tree: one arena node per unique package.

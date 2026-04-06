@@ -4,11 +4,11 @@ use ratatui::{
     widgets::Block,
 };
 
-use crate::core::{Dependency, DependencyNode, DependencyTree, NodeId};
+use crate::core::{Dependency, DependencyNode, DependencyTree};
 
 use super::{
     lineage::Lineage,
-    state::{TreeWidgetState, VisibleNode},
+    state::{TreeWidgetState, VisIdx, VisibleNode},
     style::TreeWidgetStyle,
     viewport::Viewport,
 };
@@ -54,36 +54,64 @@ impl<'a, 's> RenderContext<'a, 's> {
     }
 
     pub fn render(&mut self, area: Rect) -> RenderOutput<'a> {
-        let Some(selected_idx) = self.state.selected_position(self.tree) else {
+        if self.state.selected_position(self.tree).is_none() {
             return RenderOutput::default();
         };
 
-        // Keep the visible list borrowed from state instead of cloning it per frame.
         self.state.ensure_visible_nodes(self.tree);
-        let selected_line = selected_idx + 1;
-        let total_lines = self.state.active_visible_nodes().len();
+        self.state.ensure_visible_metadata(self.tree);
 
-        let mut viewport = Viewport::new(area, self.block).center_on(selected_line, total_lines, 1);
+        let total_lines = self.state.total_lines(self.tree);
+        let selected_vpos = self.state.selected_virtual_pos();
+        let prev_offset = self.state.viewport.offset;
+        let selected_vline = selected_vpos.map(|vp| vp.0).unwrap_or(0);
+        let mut viewport = Viewport::new(area, self.block).scroll_into_view(
+            selected_vline,
+            total_lines,
+            1,
+            prev_offset,
+        );
         self.state.update_viewport(viewport);
 
-        let context_lines = {
+        // Context lines: walk parent_vis_idx from the node at viewport.offset.min(max_offset),
+        // matching the original context bar behavior.
+        let context_vpos = viewport.offset.min(viewport.max_offset);
+        let context_lines = if context_vpos > 0 {
             let visible_nodes = self.state.active_visible_nodes();
-            self.render_context_lines(visible_nodes, viewport.offset.min(viewport.max_offset))
+            let selected_vis = self.state.selected_position_cached();
+            if let Some(context_idx) = visible_nodes
+                .iter()
+                .position(|n| n.virtual_pos.0 == context_vpos)
+            {
+                self.render_context_lines(visible_nodes, context_idx, selected_vis)
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
         };
 
         let content_height = viewport.height.saturating_sub(context_lines.len());
-
         viewport.clamp_offset(total_lines, context_lines.len());
         self.state.update_viewport(viewport);
 
-        let start_flat = viewport.offset;
+        // Render viewport rows: find nodes with virtual_pos in [viewport.offset, offset + content_height).
+        let render_start_vpos = viewport.offset;
+        let render_end_vpos = viewport.offset + content_height;
         let mut lines = Vec::with_capacity(content_height);
-        let end_flat = (start_flat + content_height).min(total_lines);
         {
             let visible_nodes = self.state.active_visible_nodes();
-            for flat_id in start_flat..end_flat {
-                if let Some(node) = visible_nodes.get(flat_id)
-                    && let Some(line) = self.render_node(node.id, false)
+            let selected_vis = self.state.selected_position_cached();
+            for (i, vnode) in visible_nodes.iter().enumerate() {
+                if vnode.virtual_pos.0 < render_start_vpos {
+                    continue;
+                }
+                if vnode.virtual_pos.0 >= render_end_vpos {
+                    break;
+                }
+                let vis = VisIdx(i);
+                if let Some(line) =
+                    self.render_visible_node(visible_nodes, vis, selected_vis, false)
                 {
                     lines.push(line);
                 }
@@ -98,19 +126,28 @@ impl<'a, 's> RenderContext<'a, 's> {
         }
     }
 
-    pub fn render_node(&self, node_id: NodeId, context_lines: bool) -> Option<Line<'a>> {
+    pub fn render_visible_node(
+        &self,
+        visible_nodes: &[VisibleNode],
+        vis_idx: VisIdx,
+        selected_vis: Option<VisIdx>,
+        context_lines: bool,
+    ) -> Option<Line<'a>> {
+        let vnode = visible_nodes.get(vis_idx.0)?;
+        let node_id = vnode.id;
         let node_data = self.tree.node(node_id)?;
         let lineage = Lineage::build(
             self.tree,
-            node_id,
-            self.state.selected,
+            visible_nodes,
+            vis_idx,
+            selected_vis,
             self.state.active_last_visible_non_group_child(),
         )?;
         let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.get(node_id.0).copied().unwrap_or(false);
         let is_group = node_data.is_group();
 
-        let is_root = node_data.parent().is_none();
+        let is_root = vnode.parent_vis_idx.is_none();
         let show_connector = !is_root;
 
         let mut spans = Vec::new();
@@ -150,9 +187,10 @@ impl<'a, 's> RenderContext<'a, 's> {
                 } else {
                     self.style.branch_symbol
                 };
-                let parent_group_style = node_data
-                    .parent()
-                    .and_then(|parent_id| self.tree.node(parent_id))
+                let parent_group_style = vnode
+                    .parent_vis_idx
+                    .and_then(|pvis| visible_nodes.get(pvis.0))
+                    .and_then(|pvnode| self.tree.node(pvnode.id))
                     .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
                 let connector_style = parent_group_style.unwrap_or(self.style.style);
                 spans.push(Span::styled(connector, connector_style));
@@ -197,29 +235,37 @@ impl<'a, 's> RenderContext<'a, 's> {
         Some(Line::from(spans))
     }
 
-    fn render_context_lines(&self, visible_nodes: &[VisibleNode], offset: usize) -> Vec<Line<'a>> {
-        if offset == 0 {
-            return Vec::new();
-        }
-
-        let Some(first_visible) = visible_nodes.get(offset) else {
+    /// Renders context lines by walking the parent chain from the first window-zone node.
+    fn render_context_lines(
+        &self,
+        visible_nodes: &[VisibleNode],
+        first_window_idx: usize,
+        selected_vis: Option<VisIdx>,
+    ) -> Vec<Line<'a>> {
+        let Some(first_visible) = visible_nodes.get(first_window_idx) else {
             return Vec::new();
         };
 
-        // Collect ancestors bottom → top
-        let mut ancestors = Vec::new();
-        let mut current = self.tree.node(first_visible.id).and_then(|n| n.parent());
+        // Collect ancestor visible indices bottom → top.
+        let mut ancestor_vis_indices: Vec<VisIdx> = Vec::new();
+        let mut current_vis = first_visible.parent_vis_idx;
 
-        while let Some(id) = current {
-            ancestors.push(id);
-            current = self.tree.node(id).and_then(|n| n.parent());
+        while let Some(vis_idx) = current_vis {
+            if let Some(vnode) = visible_nodes.get(vis_idx.0) {
+                ancestor_vis_indices.push(vis_idx);
+                current_vis = vnode.parent_vis_idx;
+            } else {
+                break;
+            }
         }
 
-        // Render top → bottom, limited
-        ancestors
+        // Render top → bottom.
+        ancestor_vis_indices
             .into_iter()
             .rev()
-            .filter_map(|id| self.render_node(id, true))
+            .filter_map(|vis_idx| {
+                self.render_visible_node(visible_nodes, vis_idx, selected_vis, true)
+            })
             .collect()
     }
 }
@@ -229,11 +275,11 @@ fn format_suffixes<'a>(node: &Dependency, style: &TreeWidgetStyle) -> Option<Vec
     let mut suffixes = Vec::new();
 
     if let Some(path) = &node.manifest_dir {
-        suffixes.push(path.clone());
+        suffixes.push(path.to_string());
     }
 
     if node.is_proc_macro {
-        suffixes.push("proc-macro".into());
+        suffixes.push("proc-macro".to_string());
     }
 
     if suffixes.is_empty() {

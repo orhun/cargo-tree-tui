@@ -17,6 +17,7 @@ use crate::cli::TreeArgs;
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
     let dependency_tree = DependencyTree::load(args.manifest_path)?;
+
     let (search_tx, search_rx) = mpsc::channel::<SearchRequest>();
     let (event_tx, event_rx) = mpsc::channel::<Event>();
     let worker_tree = dependency_tree.clone();
