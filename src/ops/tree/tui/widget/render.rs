@@ -59,7 +59,6 @@ impl<'a, 's> RenderContext<'a, 's> {
         };
 
         self.state.ensure_visible_nodes(self.tree);
-        self.state.ensure_visible_metadata(self.tree);
 
         let total_lines = self.state.total_lines(self.tree);
         let selected_vpos = self.state.selected_virtual_pos();
@@ -136,13 +135,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         let vnode = visible_nodes.get(vis_idx.0)?;
         let node_id = vnode.id;
         let node_data = self.tree.node(node_id)?;
-        let lineage = Lineage::build(
-            self.tree,
-            visible_nodes,
-            vis_idx,
-            selected_vis,
-            self.state.active_last_visible_non_group_child(),
-        )?;
+        let lineage = Lineage::build(self.tree, visible_nodes, vis_idx, selected_vis)?;
         let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.get(node_id.0).copied().unwrap_or(false);
         let is_group = node_data.is_group();

@@ -634,7 +634,7 @@ fn large_dag_no_oom() {
     let b_children: Vec<NodeId> = (11..=20).map(NodeId).collect();
     for i in 0..10 {
         arena.push(DependencyNode::Crate(Dependency {
-            name: format!("a{i}").into(),
+            name: format!("a{i}"),
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,
@@ -645,7 +645,7 @@ fn large_dag_no_oom() {
     let c_children: Vec<NodeId> = (21..=30).map(NodeId).collect();
     for i in 0..10 {
         arena.push(DependencyNode::Crate(Dependency {
-            name: format!("b{i}").into(),
+            name: format!("b{i}"),
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,
@@ -655,7 +655,7 @@ fn large_dag_no_oom() {
 
     for i in 0..10 {
         arena.push(DependencyNode::Crate(Dependency {
-            name: format!("c{i}").into(),
+            name: format!("c{i}"),
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,

@@ -28,17 +28,11 @@ impl Lineage {
         visible_nodes: &[VisibleNode],
         vis_idx: VisIdx,
         selected_vis_idx: Option<VisIdx>,
-        last_visible_non_group_child: Option<&[Option<VisIdx>]>,
     ) -> Option<Self> {
         let vnode = visible_nodes.get(vis_idx.0)?;
         tree.node(vnode.id)?;
 
-        let is_last = match vnode.parent_vis_idx {
-            Some(parent_vis) => {
-                !Self::has_more_visible_siblings(vis_idx, parent_vis, last_visible_non_group_child)
-            }
-            None => true,
-        };
+        let is_last = vnode.is_last_non_group_child;
 
         let mut lineage = Vec::new();
         let mut current_vis = vnode.parent_vis_idx;
@@ -48,11 +42,7 @@ impl Lineage {
             let ancestor = tree.node(ancestor_vnode.id)?;
 
             if let Some(grand_vis) = ancestor_vnode.parent_vis_idx {
-                let has_more_siblings = Self::has_more_visible_siblings(
-                    ancestor_vis,
-                    grand_vis,
-                    last_visible_non_group_child,
-                );
+                let has_more_siblings = !ancestor_vnode.is_last_non_group_child;
                 let grand_node_id = visible_nodes[grand_vis.0].id;
                 let edge_style = tree
                     .node(grand_node_id)
@@ -72,17 +62,5 @@ impl Lineage {
             is_last,
             is_selected: selected_vis_idx == Some(vis_idx),
         })
-    }
-
-    /// Returns true if the given visible position has any non-group sibling after it.
-    fn has_more_visible_siblings(
-        vis_idx: VisIdx,
-        parent_vis_idx: VisIdx,
-        last_visible_non_group_child: Option<&[Option<VisIdx>]>,
-    ) -> bool {
-        last_visible_non_group_child
-            .and_then(|children| children.get(parent_vis_idx.0))
-            .and_then(|&last_child| last_child)
-            .is_some_and(|last_child_vis| last_child_vis != vis_idx)
     }
 }

@@ -14,7 +14,6 @@ use cargo::{
 };
 use cargo_util::paths::normalize_path;
 use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
-use compact_str::CompactString;
 use ratatui::style::Style;
 use rustc_hash::FxHashMap;
 
@@ -66,11 +65,11 @@ impl From<DepKind> for DependencyType {
 #[derive(Debug, Clone)]
 pub struct Dependency {
     /// Crate name.
-    pub name: CompactString,
+    pub name: String,
     /// Crate version.
-    pub version: CompactString,
+    pub version: String,
     /// Local manifest directory (only for workspace members).
-    pub manifest_dir: Option<CompactString>,
+    pub manifest_dir: Option<String>,
     /// Whether this crate exposes a proc-macro target.
     pub is_proc_macro: bool,
     /// Children represented as node indices for downward traversal.
@@ -149,10 +148,30 @@ impl DependencyNode {
 ///
 /// Parent relationships are stored in a separate reverse-index rather than
 /// on each node, since a deduplicated node can have multiple parents.
+///
+/// Example:
+///
+/// app
+/// |- foo
+/// |  `- baz
+/// `- bar
+///    `- baz
+///
+/// nodes:
+///   0 = app(children = [1, 2])
+///   1 = foo(children = [3])
+///   2 = bar(children = [3])
+///   3 = baz(children = [])
+///
+/// parents:
+///   0 -> []
+///   1 -> [0]
+///   2 -> [0]
+///   3 -> [1, 2]
 #[derive(Debug, Clone)]
 pub struct DependencyTree {
     /// Name of the root package (or workspace placeholder when missing).
-    pub workspace_name: CompactString,
+    pub workspace_name: String,
     /// Arena storing all dependency nodes.
     pub nodes: Vec<DependencyNode>,
     /// For each node, the list of parent node ids (reverse index of children).
@@ -167,13 +186,14 @@ impl DependencyTree {
     pub fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
         let resolved = ResolvedWorkspace::load(manifest_path)?;
         let workspace_name = resolved.workspace_name.clone();
-        let deps = build_dependency_tree(&resolved);
+        let mut collected = collect_packages(&resolved);
+        let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
 
         Ok(DependencyTree {
             workspace_name,
-            parents: deps.parents,
-            nodes: deps.nodes,
-            roots: deps.roots,
+            parents,
+            nodes: collected.nodes,
+            roots: collected.roots,
         })
     }
 
@@ -198,9 +218,9 @@ impl DependencyTree {
 
 /// Snapshot of a Cargo package with the fields required fields.
 pub struct PackageSnapshot {
-    name: CompactString,
-    version: CompactString,
-    manifest_dir: Option<CompactString>,
+    name: String,
+    version: String,
+    manifest_dir: Option<String>,
     is_proc_macro: bool,
 }
 
@@ -210,11 +230,11 @@ impl PackageSnapshot {
             .package_id()
             .source_id()
             .is_path()
-            .then(|| package.root().display().to_string().into());
+            .then(|| package.root().display().to_string());
 
         Self {
-            name: package.name().as_str().into(),
-            version: package.version().to_string().into(),
+            name: package.name().as_str().to_owned(),
+            version: package.version().to_string(),
             manifest_dir,
             is_proc_macro: package.proc_macro(),
         }
@@ -223,7 +243,7 @@ impl PackageSnapshot {
 
 /// Resolved Cargo workspace with the data required to build the dependency tree.
 struct ResolvedWorkspace {
-    workspace_name: CompactString,
+    workspace_name: String,
     packages: FxHashMap<PackageId, PackageSnapshot>,
     /// Deduplicated, classified outgoing edges keyed by source package.
     edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
@@ -231,6 +251,13 @@ struct ResolvedWorkspace {
 }
 
 impl ResolvedWorkspace {
+    /// Resolve a Cargo workspace into the minimal data needed to build the
+    /// deduplicated dependency tree.
+    ///
+    /// This loads the workspace through Cargo's own resolver, snapshots each
+    /// reachable package into a compact [`PackageSnapshot`], classifies outgoing
+    /// edges by dependency kind, and records the workspace member ids that act
+    /// as graph roots.
     fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
         let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
         let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
@@ -242,6 +269,7 @@ impl ResolvedWorkspace {
             CompileKindFallback::JustHost,
         )
         .context("failed to determine Cargo target kinds")?;
+
         let mut target_data =
             RustcTargetData::new(&ws, &requested_kinds).context("failed to load target data")?;
         let specs = ops::Packages::All(Vec::new())
@@ -264,8 +292,8 @@ impl ResolvedWorkspace {
 
         let workspace_name = ws
             .current_opt()
-            .map(|pkg| pkg.name().as_str().into())
-            .unwrap_or_else(|| "workspace".into());
+            .map(|pkg| pkg.name().as_str().to_owned())
+            .unwrap_or_else(|| "workspace".to_owned());
 
         // Snapshot every reachable package: workspace members first (so a
         // member that also appears in pkg_set keeps its workspace identity),
@@ -315,6 +343,8 @@ impl ResolvedWorkspace {
     }
 }
 
+/// Helper function to resolve the manifest path, handling absolute vs relative paths and
+/// defaulting to finding the workspace root when no path is provided.
 fn resolve_manifest_path(gctx: &GlobalContext, manifest_path: Option<PathBuf>) -> Result<PathBuf> {
     let raw = match manifest_path {
         Some(path) if path.is_absolute() => path,
@@ -328,23 +358,6 @@ fn resolve_manifest_path(gctx: &GlobalContext, manifest_path: Option<PathBuf>) -
     Ok(normalize_path(&raw))
 }
 
-struct BuildResult {
-    roots: Vec<NodeId>,
-    nodes: Vec<DependencyNode>,
-    parents: Vec<Vec<NodeId>>,
-}
-
-fn build_dependency_tree(resolved: &ResolvedWorkspace) -> BuildResult {
-    let mut collected = collect_packages(resolved);
-    let parents = wire_edges(resolved, &collected.pkg_index, &mut collected.nodes);
-
-    BuildResult {
-        roots: collected.roots,
-        nodes: collected.nodes,
-        parents,
-    }
-}
-
 /// The node arena with empty children, a package-to-node index, and root ids.
 struct CollectedPackages {
     nodes: Vec<DependencyNode>,
@@ -352,9 +365,10 @@ struct CollectedPackages {
     roots: Vec<NodeId>,
 }
 
-/// Create one `DependencyNode::Crate` per reachable package.
+/// Create one [`DependencyNode::Crate`] per reachable package.
 ///
-/// DFS from workspace roots. Nodes have empty children at this point.
+/// Starting from the workspace roots, walk the resolved graph and assign each
+/// unique package a stable arena node id. Child links are filled in later.
 fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
     let capacity = resolved.packages.len();
     let mut remaining: Vec<PackageId> = Vec::with_capacity(capacity);
@@ -395,10 +409,15 @@ fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
     }
 }
 
-/// Classify each crate's deps by kind.
+/// Wire the dependency edges between the already-collected arena nodes.
 ///
-/// Attaches normal deps as direct children, creates group nodes for dev/build
-/// deps, and builds the parents reverse-index.
+/// Normal dependencies become direct children of the crate node.
+///
+/// Dev and build dependencies are grouped under synthetic
+/// `[dev-dependencies]` / `[build-dependencies]` nodes.
+///
+/// While attaching those child links, this pass also builds the reverse
+/// parent index for every node.
 fn wire_edges(
     resolved: &ResolvedWorkspace,
     pkg_index: &FxHashMap<PackageId, NodeId>,
