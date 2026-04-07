@@ -2,9 +2,19 @@ use rustc_hash::FxHashSet;
 
 use crate::core::{DependencyNode, DependencyTree, NodeId};
 
-use super::view_cache::{ViewCache, materialize_window};
+use super::view_cache::ViewCache;
 use super::viewport::Viewport;
 
+/// The widget uses three different index spaces:
+///
+/// - [`NodeId`] identifies a node in the arena-backed dependency graph.
+/// - [`VirtualPos`] identifies a row in the fully flattened virtual tree for
+///   the current `(open, filter)` state.
+/// - [`VisIdx`] identifies a row inside the small materialized window stored in
+///   the active [`ViewCache`].
+///
+/// Keeping these separate avoids mixing graph identity, virtual scroll
+/// position, and cache-local row indices.
 /// Index into a flattened visible-node cache.
 ///
 /// Distinguishes visible-cache positions from [`NodeId`] at the type level
@@ -66,6 +76,10 @@ pub struct VisibleNode {
     pub next_sibling: Option<VisIdx>,
     /// Previous sibling in the same visible cache sharing the same parent.
     pub prev_sibling: Option<VisIdx>,
+    /// Whether this node is the last non-group child of its parent in the
+    /// full virtual stream under the current open/filter (not just within
+    /// the materialized window). Drives the `└─` vs `├─` decision.
+    pub is_last_non_group_child: bool,
 }
 
 /// Search result payload computed off the UI thread.
@@ -100,10 +114,7 @@ impl Default for TreeWidgetState {
             viewport: Viewport::default(),
             subtree_dirty: true,
             dirty: true,
-            normal: ViewCache {
-                metadata_dirty: true,
-                ..ViewCache::default()
-            },
+            normal: ViewCache::default(),
             search: ViewCache::default(),
             search_visible_nodes: Vec::new(),
             search_matches: Vec::new(),
@@ -221,11 +232,6 @@ impl TreeWidgetState {
         }
 
         search_state
-    }
-
-    /// Returns the last visible non-group child per parent for the active view.
-    pub fn active_last_visible_non_group_child(&self) -> Option<&[Option<VisIdx>]> {
-        Some(&self.active_cache().last_non_group_child)
     }
 
     /// Moves the selection to the next visible dependency.
@@ -363,36 +369,31 @@ impl TreeWidgetState {
 
     /// Moves the selection to the next sibling, if any.
     pub fn select_next_sibling(&mut self, tree: &DependencyTree) {
-        if !self.ensure_selection(tree) {
-            return;
-        }
-        self.ensure_visible_metadata(tree);
-        let Some(vpos) = self.selected_virtual_pos else {
-            return;
-        };
-        if let Some((_, vnode)) = self.find_by_vpos(vpos)
-            && let Some(next) = vnode.next_sibling
-            && let Some(next_node) = self.active_visible_nodes().get(next.0)
-        {
-            self.selected_virtual_pos = Some(next_node.virtual_pos);
-            self.dirty = true;
-        }
+        self.select_sibling(tree, |n| n.next_sibling);
     }
 
     /// Moves the selection to the previous sibling, if any.
     pub fn select_previous_sibling(&mut self, tree: &DependencyTree) {
+        self.select_sibling(tree, |n| n.prev_sibling);
+    }
+
+    fn select_sibling(
+        &mut self,
+        tree: &DependencyTree,
+        pick: impl Fn(&VisibleNode) -> Option<VisIdx>,
+    ) {
         if !self.ensure_selection(tree) {
             return;
         }
-        self.ensure_visible_metadata(tree);
         let Some(vpos) = self.selected_virtual_pos else {
             return;
         };
+
         if let Some((_, vnode)) = self.find_by_vpos(vpos)
-            && let Some(prev) = vnode.prev_sibling
-            && let Some(prev_node) = self.active_visible_nodes().get(prev.0)
+            && let Some(sibling) = pick(vnode)
+            && let Some(sibling_node) = self.active_visible_nodes().get(sibling.0)
         {
-            self.selected_virtual_pos = Some(prev_node.virtual_pos);
+            self.selected_virtual_pos = Some(sibling_node.virtual_pos);
             self.dirty = true;
         }
     }
@@ -487,11 +488,11 @@ impl TreeWidgetState {
 
         self.ensure_node_capacity(tree);
 
-        self.normal.recompute_subtree_sizes(tree, &self.open, None);
+        self.normal.refresh_sizes(tree, &self.open, None);
 
         if self.is_searching() {
             self.search
-                .recompute_subtree_sizes(tree, &self.open, Some(&self.search_visible_nodes));
+                .refresh_sizes(tree, &self.open, Some(&self.search_visible_nodes));
         }
 
         self.subtree_dirty = false;
@@ -506,12 +507,6 @@ impl TreeWidgetState {
         self.ensure_subtree_sizes(tree);
         self.rebuild_visible(tree);
         self.dirty = false;
-    }
-
-    /// Lazily computes sibling links and last-child map for the active visible cache.
-    pub fn ensure_visible_metadata(&mut self, tree: &DependencyTree) {
-        self.normal.ensure_metadata(tree);
-        self.search.ensure_metadata(tree);
     }
 
     /// Returns the currently active visible slice.
@@ -574,27 +569,20 @@ impl TreeWidgetState {
         // Materialize enough for viewport + buffer for scrolling.
         let window_count = viewport_height * 2;
 
-        let (sizes, filter): (&[usize], Option<&[bool]>) = if self.is_searching() {
-            (&self.search.subtree_sizes, Some(&self.search_visible_nodes))
+        let searching = self.is_searching();
+        let (cache, filter): (&mut ViewCache, Option<&[bool]>) = if searching {
+            (&mut self.search, Some(&self.search_visible_nodes))
         } else {
-            (&self.normal.subtree_sizes, None)
+            (&mut self.normal, None)
         };
 
-        let result = materialize_window(
+        cache.rematerialize(
             tree,
             &self.open,
-            sizes,
             filter,
             tree.roots(),
-            window_start,
-            window_count,
+            window_start..window_start + window_count,
         );
-
-        if self.is_searching() {
-            self.search.apply_materialization(result);
-        } else {
-            self.normal.apply_materialization(result);
-        }
     }
 
     /// Rebuilds the search view after applying new search state.
@@ -605,7 +593,7 @@ impl TreeWidgetState {
         }
 
         self.search
-            .recompute_subtree_sizes(tree, &self.open, Some(&self.search_visible_nodes));
+            .refresh_sizes(tree, &self.open, Some(&self.search_visible_nodes));
 
         // Clamp selection to search view bounds.
         if let Some(vpos) = self.selected_virtual_pos

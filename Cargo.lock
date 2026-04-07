@@ -402,7 +402,6 @@ dependencies = [
  "cargo-util",
  "clap",
  "clap-cargo",
- "compact_str",
  "crossterm",
  "pretty_assertions",
  "ratatui",
