@@ -18,6 +18,11 @@ use crate::cli::TreeArgs;
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
     let no_dedupe = args.no_dedupe || args.all;
+    let (depth, workspace_depth) = match args.depth {
+        Some(crate::cli::Depth::Number(depth)) => (Some(depth), false),
+        Some(crate::cli::Depth::Workspace) => (None, true),
+        None => (None, false),
+    };
     let prefix = resolve_prefix(args.prefix, args.no_indent, args.prefix_depth)?;
     let format = TreeFormat::parse(&args.format)?;
     let tui_prefix = match prefix {
@@ -47,7 +52,8 @@ pub fn run(args: TreeArgs) -> Result<()> {
         prune: args.prune,
         invert: args.invert,
         duplicates: args.duplicates,
-        depth: args.depth,
+        depth,
+        workspace_depth,
         targets: args.target,
         all_targets: args.all_targets,
         features: args.features,
@@ -71,7 +77,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
     let mut state = TuiState::new(
         dependency_tree,
         search_tx,
-        resolution_options.depth,
+        depth,
         tui_prefix,
         tui_charset,
         format,
