@@ -105,7 +105,7 @@ pub struct TreeArgs {
     #[arg(short = 'd', long = "duplicates", alias = "duplicate")]
     pub duplicates: bool,
 
-    /// Character set to use in output
+    /// Character set to use for tree symbols (utf8 or ascii; default: auto)
     #[arg(long = "charset", value_name = "CHARSET", value_enum)]
     pub charset: Option<Charset>,
 

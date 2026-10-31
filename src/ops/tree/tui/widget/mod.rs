@@ -13,7 +13,7 @@ use self::{breadcrumb::Breadcrumb, render::RenderContext};
 pub use self::{
     render::RenderOutput,
     state::{SearchState, TreeWidgetState, VisIdx},
-    style::{TreePrefix, TreeWidgetStyle},
+    style::{TreeCharset, TreePrefix, TreeWidgetStyle},
 };
 
 mod breadcrumb;
@@ -71,6 +71,11 @@ impl<'a> TreeWidget<'a> {
 
     pub fn prefix(mut self, prefix: TreePrefix) -> Self {
         self.prefix = prefix;
+        self
+    }
+
+    pub fn charset(mut self, charset: TreeCharset) -> Self {
+        self.style.set_charset(charset);
         self
     }
 }

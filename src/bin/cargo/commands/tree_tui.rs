@@ -9,7 +9,7 @@ use cargo_tree_tui::{
     ops::tree::tui::{
         draw_tui,
         state::{Event, SearchRequest, SearchResult, TuiState},
-        widget::{TreePrefix, TreeWidgetState},
+        widget::{TreeCharset, TreePrefix, TreeWidgetState},
     },
 };
 
@@ -24,6 +24,19 @@ pub fn run(args: TreeArgs) -> Result<()> {
         crate::cli::Prefix::Indent => TreePrefix::Indent,
         crate::cli::Prefix::None => TreePrefix::None,
     };
+    let tui_charset = args.charset.map_or_else(
+        || {
+            if cargo::core::Shell::new().out_unicode() {
+                TreeCharset::Utf8
+            } else {
+                TreeCharset::Ascii
+            }
+        },
+        |charset| match charset {
+            crate::cli::Charset::Utf8 => TreeCharset::Utf8,
+            crate::cli::Charset::Ascii => TreeCharset::Ascii,
+        },
+    );
     let resolution_options = ResolutionOptions {
         workspace: args.workspace,
         packages: args.package,
@@ -58,6 +71,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
         search_tx,
         resolution_options.depth,
         tui_prefix,
+        tui_charset,
     );
     let mut terminal = ratatui::init();
 
