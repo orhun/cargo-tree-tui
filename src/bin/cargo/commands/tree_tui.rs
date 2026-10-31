@@ -81,15 +81,18 @@ pub fn run(args: TreeArgs) -> Result<()> {
     let search_event_tx = event_tx.clone();
     let worker_handle = thread::spawn(move || search_worker(search_rx, search_event_tx));
     let (resolution_tx, resolution_rx) = mpsc::channel::<TreeResolutionRequest>();
+    let (resolution_resume_tx, resolution_resume_rx) = mpsc::channel();
     let resolution_event_tx = event_tx.clone();
-    let resolution_handle =
-        thread::spawn(move || resolution_worker(resolution_rx, resolution_event_tx));
+    let resolution_handle = thread::spawn(move || {
+        resolution_worker(resolution_rx, resolution_resume_rx, resolution_event_tx)
+    });
 
     let mut state = TuiState::new(
         dependency_tree,
         TuiChannels {
             search: search_tx,
             resolution: resolution_tx,
+            resolution_resume: resolution_resume_tx,
         },
         depth,
         tui_prefix,
@@ -97,24 +100,48 @@ pub fn run(args: TreeArgs) -> Result<()> {
         format,
         tree_options,
     );
-    let mut terminal = ratatui::init();
+    let mut terminal = Some(ratatui::init());
 
     while state.running {
-        terminal.draw(|frame| draw_tui(frame, &mut state))?;
+        if let Some(terminal) = &mut terminal {
+            terminal.draw(|frame| draw_tui(frame, &mut state))?;
+        }
 
         while let Ok(event) = event_rx.try_recv() {
+            let resolution_finished = matches!(&event, Event::TreeResolved(_));
             state.handle_event(event);
+            if resolution_finished && terminal.is_none() {
+                terminal = Some(ratatui::init());
+            }
+        }
+
+        if terminal.is_none() {
+            if let Ok(event) = event_rx.recv_timeout(Duration::from_millis(16)) {
+                let resolution_finished = matches!(&event, Event::TreeResolved(_));
+                state.handle_event(event);
+                if resolution_finished {
+                    terminal = Some(ratatui::init());
+                }
+            }
+            continue;
         }
 
         if event::poll(Duration::from_millis(16))?
             && let CrosstermEvent::Key(key_event) = event::read()?
         {
             state.handle_event(Event::Key(key_event));
+            if state.resolution_pending() && terminal.is_some() {
+                terminal = None;
+                ratatui::restore();
+                state.resume_resolution();
+            }
         }
     }
 
     drop(state);
-    ratatui::restore();
+    if terminal.take().is_some() {
+        ratatui::restore();
+    }
     let _ = worker_handle.join();
     drop(resolution_handle);
     Ok(())
@@ -169,11 +196,16 @@ fn search_worker(search_rx: mpsc::Receiver<SearchRequest>, event_tx: mpsc::Sende
 
 fn resolution_worker(
     resolution_rx: mpsc::Receiver<TreeResolutionRequest>,
+    resolution_resume_rx: mpsc::Receiver<()>,
     event_tx: mpsc::Sender<Event>,
 ) {
     while let Ok(mut request) = resolution_rx.recv() {
         while let Ok(next_request) = resolution_rx.try_recv() {
             request = next_request;
+        }
+
+        if resolution_resume_rx.recv().is_err() {
+            break;
         }
 
         let TreeResolutionRequest {

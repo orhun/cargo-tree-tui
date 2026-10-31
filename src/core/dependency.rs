@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeSet, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use cargo::{
@@ -332,6 +332,22 @@ pub struct ResolutionOptions {
     pub all_features: bool,
     /// Do not activate the default feature.
     pub no_default_features: bool,
+}
+
+/// Feature names declared by members of a Cargo workspace.
+///
+/// This is loaded lazily by the TUI when the feature selector is opened.
+pub fn workspace_features(manifest_path: Option<PathBuf>) -> Result<Vec<String>> {
+    let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
+    let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
+    let workspace =
+        Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
+
+    let features = workspace
+        .members()
+        .flat_map(|package| package.summary().features().keys().map(ToString::to_string))
+        .collect::<BTreeSet<_>>();
+    Ok(features.into_iter().collect())
 }
 
 #[derive(Debug, Clone, Copy)]

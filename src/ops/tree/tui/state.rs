@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::TuiTree;
 use super::selector::{SelectorOption, SelectorState};
-use crate::core::dependency::DependencyType;
+use crate::core::dependency::{DependencyType, workspace_features};
 use crate::core::{PackageFormatRequirements, ResolutionOptions};
 
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
@@ -22,6 +22,7 @@ pub enum InputMode {
 enum SelectorKind {
     EdgeKinds,
     Targets,
+    Features,
 }
 
 #[derive(Debug)]
@@ -70,6 +71,7 @@ pub struct TreeOptions {
 pub struct TuiChannels {
     pub search: Sender<SearchRequest>,
     pub resolution: Sender<TreeResolutionRequest>,
+    pub resolution_resume: Sender<()>,
 }
 
 #[derive(Debug)]
@@ -79,6 +81,7 @@ pub struct TuiState {
     pub tree_options: TreeOptions,
     pub selector: Option<SelectorState>,
     selector_kind: Option<SelectorKind>,
+    feature_choices: Option<Vec<String>>,
     pub prefix: TreePrefix,
     pub charset: TreeCharset,
     pub format: TreeFormat,
@@ -92,6 +95,7 @@ pub struct TuiState {
     search_tx: Sender<SearchRequest>,
     resolution_generation: u64,
     resolution_tx: Sender<TreeResolutionRequest>,
+    resolution_resume_tx: Sender<()>,
 }
 
 impl TuiState {
@@ -116,6 +120,7 @@ impl TuiState {
             tree_options,
             selector: None,
             selector_kind: None,
+            feature_choices: None,
             prefix,
             charset,
             format,
@@ -129,7 +134,18 @@ impl TuiState {
             search_tx: channels.search,
             resolution_generation: 0,
             resolution_tx: channels.resolution,
+            resolution_resume_tx: channels.resolution_resume,
         }
+    }
+
+    pub fn resolution_pending(&self) -> bool {
+        self.selector
+            .as_ref()
+            .is_some_and(|selector| selector.applying)
+    }
+
+    pub fn resume_resolution(&self) {
+        let _ = self.resolution_resume_tx.send(());
     }
 
     pub fn handle_event(&mut self, event: Event) {
@@ -215,6 +231,9 @@ impl TuiState {
             }
             (KeyCode::Char('t'), _) => {
                 self.open_target_selector();
+            }
+            (KeyCode::Char('f'), _) => {
+                self.open_feature_selector();
             }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
@@ -329,6 +348,63 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
+    fn open_feature_selector(&mut self) {
+        let mut load_error = None;
+        let choices = if let Some(choices) = &self.feature_choices {
+            choices.clone()
+        } else {
+            match workspace_features(self.tree_options.manifest_path.clone()) {
+                Ok(choices) => {
+                    self.feature_choices = Some(choices.clone());
+                    choices
+                }
+                Err(error) => {
+                    load_error = Some(error.to_string());
+                    Vec::new()
+                }
+            }
+        };
+
+        let resolution = &self.tree_options.resolution;
+        let selected_features = resolution
+            .features
+            .iter()
+            .flat_map(|feature| feature.split([',', ' ']))
+            .filter(|feature| !feature.is_empty())
+            .collect::<Vec<_>>();
+        let mut options = vec![
+            SelectorOption::new(
+                DEFAULT_FEATURES,
+                "Default features",
+                !resolution.no_default_features,
+            ),
+            SelectorOption::new(ALL_FEATURES, "All features", resolution.all_features),
+        ];
+        let mut choices = choices;
+        for feature in &selected_features {
+            if !choices.iter().any(|choice| choice.as_str() == *feature) {
+                choices.push((*feature).to_owned());
+            }
+        }
+        choices.sort_unstable();
+        choices.dedup();
+        options.extend(choices.into_iter().map(|feature| {
+            SelectorOption::new(
+                feature.clone(),
+                feature.clone(),
+                selected_features.contains(&feature.as_str()),
+            )
+        }));
+
+        let mut selector = SelectorState::new("Features", options)
+            .filterable()
+            .max_height(20);
+        selector.message = load_error;
+        self.selector = Some(selector);
+        self.selector_kind = Some(SelectorKind::Features);
+        self.input_mode = InputMode::Selector;
+    }
+
     fn handle_selector_key(&mut self, key: KeyCode) {
         let Some(selector) = self.selector.as_mut() else {
             self.input_mode = InputMode::Normal;
@@ -361,6 +437,7 @@ impl TuiState {
         match self.selector_kind {
             Some(SelectorKind::EdgeKinds) => self.apply_edge_selection(),
             Some(SelectorKind::Targets) => self.apply_target_selection(),
+            Some(SelectorKind::Features) => self.apply_feature_selection(),
             None => {}
         }
     }
@@ -455,6 +532,58 @@ impl TuiState {
         }
     }
 
+    fn apply_feature_selection(&mut self) {
+        let Some(selector) = self.selector.as_ref() else {
+            return;
+        };
+        let selected = selector.checked_values();
+        let features = selected
+            .iter()
+            .filter(|feature| {
+                feature.as_str() != DEFAULT_FEATURES && feature.as_str() != ALL_FEATURES
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        let all_features = selected
+            .iter()
+            .any(|feature| feature.as_str() == ALL_FEATURES);
+        let no_default_features = !selected
+            .iter()
+            .any(|feature| feature.as_str() == DEFAULT_FEATURES);
+        let current = &self.tree_options.resolution;
+        let mut current_features = current.features.clone();
+        current_features.sort_unstable();
+        if features == current_features
+            && all_features == current.all_features
+            && no_default_features == current.no_default_features
+        {
+            self.selector = None;
+            self.selector_kind = None;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        let mut options = self.tree_options.clone();
+        options.resolution.features = features;
+        options.resolution.all_features = all_features;
+        options.resolution.no_default_features = no_default_features;
+        self.resolution_generation = self.resolution_generation.wrapping_add(1);
+        let request = TreeResolutionRequest {
+            generation: self.resolution_generation,
+            format_requirements: self.format.requirements(),
+            options,
+        };
+
+        if self.resolution_tx.send(request).is_ok() {
+            if let Some(selector) = self.selector.as_mut() {
+                selector.applying = true;
+                selector.message = None;
+            }
+        } else if let Some(selector) = self.selector.as_mut() {
+            selector.message = Some("Could not start dependency resolution".to_owned());
+        }
+    }
+
     fn handle_tree_resolved(&mut self, result: TreeResolutionResult) {
         if result.generation != self.resolution_generation {
             return;
@@ -521,6 +650,8 @@ const EDGE_KINDS: [DependencyType; 3] = [
 ];
 
 const DEFAULT_TARGET: &str = "__cargo_tree_tui_default_target";
+const DEFAULT_FEATURES: &str = "__cargo_tree_tui_default_features";
+const ALL_FEATURES: &str = "__cargo_tree_tui_all_features";
 
 fn target_choices() -> &'static [String] {
     static TARGET_CHOICES: OnceLock<Vec<String>> = OnceLock::new();
