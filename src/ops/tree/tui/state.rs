@@ -266,6 +266,11 @@ impl TuiState {
                     "Development dependencies",
                     selected[2],
                 ),
+                SelectorOption::new(
+                    "features",
+                    "Feature edges",
+                    feature_edges(&self.tree_options.resolution),
+                ),
             ],
         ));
         self.input_mode = InputMode::Selector;
@@ -303,14 +308,25 @@ impl TuiState {
         let selected_values = selector.checked_values();
         let selected =
             EDGE_KINDS.map(|kind| selected_values.iter().any(|value| value == edge_flag(kind)));
-        if selected == edge_kinds(&self.tree_options.resolution) {
+        let features = selected_values.iter().any(|value| value == "features");
+        if selected == edge_kinds(&self.tree_options.resolution)
+            && features == feature_edges(&self.tree_options.resolution)
+        {
             self.selector = None;
             self.input_mode = InputMode::Normal;
             return;
         }
 
+        if features && self.tree_options.resolution.duplicates {
+            if let Some(selector) = self.selector.as_mut() {
+                selector.message =
+                    Some("Feature edges cannot be combined with --duplicates".to_owned());
+            }
+            return;
+        }
+
         let mut options = self.tree_options.clone();
-        set_edge_kinds(&mut options.resolution, selected);
+        set_edge_options(&mut options.resolution, selected, features);
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
@@ -440,21 +456,36 @@ fn edge_kinds(options: &ResolutionOptions) -> [bool; 3] {
     selected
 }
 
-fn set_edge_kinds(options: &mut ResolutionOptions, selected: [bool; 3]) {
-    let had_all = options.edges.iter().any(|kind| kind == "all");
+fn feature_edges(options: &ResolutionOptions) -> bool {
+    options
+        .edges
+        .iter()
+        .any(|kind| matches!(kind.as_str(), "features" | "all"))
+}
+
+fn set_edge_options(options: &mut ResolutionOptions, selected: [bool; 3], features: bool) {
     options.edges.retain(|kind| {
-        kind != "all"
+        !matches!(kind.as_str(), "all" | "features")
             && !EDGE_KINDS.iter().any(|edge| kind == edge_flag(*edge))
             && !EDGE_KINDS
                 .iter()
                 .any(|edge| kind == excluded_edge_flag(*edge))
     });
-    if had_all && !options.edges.iter().any(|kind| kind == "features") {
-        options.edges.push("features".to_owned());
-    }
     options.no_dev_dependencies = false;
 
+    if selected == [true; 3] && features {
+        options.edges.push("all".to_owned());
+        return;
+    }
+    if features {
+        options.edges.push("features".to_owned());
+    }
     if selected == [true; 3] {
+        options.edges.extend(
+            EDGE_KINDS
+                .into_iter()
+                .map(|kind| edge_flag(kind).to_owned()),
+        );
         return;
     }
 

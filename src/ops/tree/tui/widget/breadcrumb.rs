@@ -54,7 +54,7 @@ impl<'a> Breadcrumb<'a> {
 
             let group_style = node.as_group().map(|group| group.kind.style());
             crumbs.push(Crumb {
-                name: node.display_name().to_string(),
+                name: node.display_label(),
                 group_style,
                 is_group: node.is_group(),
             });

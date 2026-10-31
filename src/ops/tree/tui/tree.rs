@@ -66,8 +66,11 @@ fn deduplicate_occurrences(tree: &mut DependencyTree) -> FxHashSet<NodeId> {
 
     for root_id in roots {
         if tree.nodes[root_id.0].is_crate() && !visited.insert(root_id) {
+            let has_children = !tree.nodes[root_id.0].children().is_empty();
             let duplicate = clone_duplicate(tree, root_id);
-            duplicates.insert(duplicate);
+            if has_children {
+                duplicates.insert(duplicate);
+            }
             display_roots.push(duplicate);
             continue;
         }
@@ -101,20 +104,32 @@ fn deduplicate_occurrences(tree: &mut DependencyTree) -> FxHashSet<NodeId> {
                 frames.push(enter(tree, child_id));
             } else if !tree.nodes[child_id.0].is_crate() {
                 if active.contains(&child_id) {
+                    let has_children = true;
                     let duplicate = clone_leaf(tree, child_id);
+                    if has_children && matches!(&tree.nodes[child_id.0], DependencyNode::Feature(_))
+                    {
+                        duplicates.insert(duplicate);
+                    }
                     let parent = frames.last_mut().expect("parent frame is non-empty");
                     parent.source_children[parent.next_child - 1] = duplicate;
                 } else if tree.nodes[child_id.0].is_group() || visited_features.insert(child_id) {
                     active.insert(child_id);
                     frames.push(enter(tree, child_id));
                 } else {
+                    let has_children = !tree.nodes[child_id.0].children().is_empty();
                     let duplicate = clone_leaf(tree, child_id);
+                    if has_children && matches!(&tree.nodes[child_id.0], DependencyNode::Feature(_))
+                    {
+                        duplicates.insert(duplicate);
+                    }
                     let parent = frames.last_mut().expect("parent frame is non-empty");
                     parent.source_children[parent.next_child - 1] = duplicate;
                 }
             } else {
+                let has_children =
+                    active.contains(&child_id) || !tree.nodes[child_id.0].children().is_empty();
                 let duplicate = clone_leaf(tree, child_id);
-                if tree.nodes[child_id.0].is_crate() {
+                if has_children {
                     duplicates.insert(duplicate);
                 }
                 let parent = frames.last_mut().expect("parent frame is non-empty");
