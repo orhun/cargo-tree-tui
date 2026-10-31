@@ -4,7 +4,8 @@ use ratatui::{
     widgets::Block,
 };
 
-use crate::core::{Dependency, DependencyNode, DependencyTree};
+use crate::core::{Dependency, DependencyNode};
+use crate::ops::tree::tui::TuiTree;
 
 use super::{
     lineage::Lineage,
@@ -32,7 +33,7 @@ pub struct RenderOutput<'a> {
 /// state end before we later borrow the state immutably (e.g. for breadcrumb
 /// rendering) while still holding references to the tree and style.
 pub struct RenderContext<'a, 's> {
-    pub tree: &'a DependencyTree,
+    pub tree: &'a TuiTree,
     pub state: &'s mut TreeWidgetState,
     pub style: &'a TreeWidgetStyle,
     pub block: Option<&'a Block<'a>>,
@@ -40,7 +41,7 @@ pub struct RenderContext<'a, 's> {
 
 impl<'a, 's> RenderContext<'a, 's> {
     pub fn new(
-        tree: &'a DependencyTree,
+        tree: &'a TuiTree,
         state: &'s mut TreeWidgetState,
         style: &'a TreeWidgetStyle,
         block: Option<&'a Block<'a>>,
@@ -202,6 +203,9 @@ impl<'a, 's> RenderContext<'a, 's> {
         match node_data {
             DependencyNode::Crate(dependency) => {
                 spans.push(Span::styled(dependency.name.clone(), name_style));
+                if self.tree.is_duplicate(node_id) {
+                    spans.push(Span::styled(" (*)", self.style.suffix_style));
+                }
                 if !dependency.version.is_empty() {
                     spans.push(Span::styled(
                         format!(" v{}", dependency.version),

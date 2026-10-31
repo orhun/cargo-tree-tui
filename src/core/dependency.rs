@@ -15,7 +15,7 @@ use cargo::{
 use cargo_util::paths::normalize_path;
 use clap_cargo::style::{DEP_BUILD, DEP_DEV, DEP_NORMAL};
 use ratatui::style::Style;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Identifier for a node within the dependency tree arena.
 ///
@@ -24,7 +24,7 @@ use rustc_hash::FxHashMap;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(pub usize);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum DependencyType {
     Normal,
     Dev,
@@ -196,13 +196,13 @@ impl DependencyTree {
         let workspace_name = resolved.workspace_name.clone();
         let mut collected = collect_packages(&resolved);
         let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
-
-        Ok(DependencyTree {
+        let tree = DependencyTree {
             workspace_name,
             parents,
             nodes: collected.nodes,
             roots: collected.roots,
-        })
+        };
+        Ok(tree)
     }
 
     /// Returns immutable access to a node identified by `id`.
@@ -240,6 +240,10 @@ pub struct ResolutionOptions {
     pub no_dev_dependencies: bool,
     /// Packages to omit wherever they occur as dependencies.
     pub prune: Vec<String>,
+    /// Packages whose reverse dependencies should be displayed.
+    pub invert: Option<Vec<String>>,
+    /// Show packages that occur with multiple versions and their reverse dependencies.
+    pub duplicates: bool,
     /// Maximum dependency depth to expand initially in the TUI.
     pub depth: Option<usize>,
     /// Explicit target triples. The special value `all` is handled like
@@ -364,7 +368,7 @@ struct ResolvedWorkspace {
     packages: FxHashMap<PackageId, PackageSnapshot>,
     /// Deduplicated, classified outgoing edges keyed by source package.
     edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
-    workspace_ids: Vec<PackageId>,
+    root_ids: Vec<PackageId>,
 }
 
 impl ResolvedWorkspace {
@@ -486,7 +490,7 @@ impl ResolvedWorkspace {
             edges.insert(pkg_id, classified);
         }
 
-        let workspace_ids = ws
+        let selected_roots: Vec<PackageId> = ws
             .members()
             .filter_map(|pkg| {
                 let package_id = pkg.package_id();
@@ -497,13 +501,148 @@ impl ResolvedWorkspace {
             })
             .collect();
 
+        let selected_reachable = reachable_packages(&selected_roots, &edges);
+        let invert_specs = invert_package_specs(options)?;
+        let invert_roots = if invert_specs.is_empty() {
+            Vec::new()
+        } else {
+            packages_matching_specs(&invert_specs, &selected_reachable)?
+        };
+
+        let (tree_roots, graph_roots, inverted) = if options.duplicates {
+            let graph_roots = if invert_roots.is_empty() {
+                selected_roots.clone()
+            } else {
+                invert_roots
+            };
+            let reachable = reachable_packages(&graph_roots, &edges);
+            let mut duplicates = duplicate_packages(&reachable);
+            if duplicates.is_empty() {
+                bail!("no duplicate packages found in the selected dependency tree");
+            }
+            duplicates.sort_unstable();
+            (duplicates, graph_roots, true)
+        } else if options.invert.is_some() {
+            if invert_roots.is_empty() {
+                bail!("`--invert` requires a package spec or `--package`");
+            }
+            (invert_roots, selected_roots.clone(), true)
+        } else {
+            (selected_roots.clone(), selected_roots, false)
+        };
+
+        let graph_scope = reachable_packages(&graph_roots, &edges);
+        edges.retain(|package_id, dependencies| {
+            if !graph_scope.contains(package_id) {
+                return false;
+            }
+            dependencies.retain(|(dependency_id, _)| graph_scope.contains(dependency_id));
+            true
+        });
+
+        if inverted {
+            edges = invert_edges(&edges);
+        }
+
         Ok(ResolvedWorkspace {
             workspace_name,
             packages,
             edges,
-            workspace_ids,
+            root_ids: tree_roots,
         })
     }
+}
+
+fn invert_package_specs(options: &ResolutionOptions) -> Result<Vec<String>> {
+    let Some(specs) = &options.invert else {
+        return Ok(Vec::new());
+    };
+    if !specs.is_empty() {
+        return Ok(specs.clone());
+    }
+    if options.packages.is_empty() {
+        bail!("`--invert` requires a package spec or `--package`");
+    }
+    Ok(options.packages.clone())
+}
+
+fn packages_matching_specs(
+    spec_values: &[String],
+    candidates: &FxHashSet<PackageId>,
+) -> Result<Vec<PackageId>> {
+    let mut matched = FxHashSet::default();
+    for value in spec_values {
+        let spec = PackageIdSpec::parse(value)
+            .with_context(|| format!("invalid package spec to invert: `{value}`"))?;
+        let mut found = false;
+        for &package_id in candidates {
+            if spec.matches(package_id) {
+                matched.insert(package_id);
+                found = true;
+            }
+        }
+        if !found {
+            bail!("package spec `{value}` is not in the selected dependency tree");
+        }
+    }
+    let mut matched: Vec<_> = matched.into_iter().collect();
+    matched.sort_unstable();
+    Ok(matched)
+}
+
+fn reachable_packages(
+    roots: &[PackageId],
+    edges: &FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
+) -> FxHashSet<PackageId> {
+    let mut reachable = FxHashSet::default();
+    let mut pending = roots.to_vec();
+    while let Some(package_id) = pending.pop() {
+        if !reachable.insert(package_id) {
+            continue;
+        }
+        if let Some(dependencies) = edges.get(&package_id) {
+            pending.extend(dependencies.iter().map(|(dependency_id, _)| *dependency_id));
+        }
+    }
+    reachable
+}
+
+fn duplicate_packages(reachable: &FxHashSet<PackageId>) -> Vec<PackageId> {
+    let mut packages_by_name: FxHashMap<String, Vec<PackageId>> = FxHashMap::default();
+    for &package_id in reachable {
+        packages_by_name
+            .entry(package_id.name().as_str().to_owned())
+            .or_default()
+            .push(package_id);
+    }
+    packages_by_name
+        .into_values()
+        .filter(|packages| {
+            let first_version = packages[0].version();
+            packages
+                .iter()
+                .any(|package_id| package_id.version() != first_version)
+        })
+        .flatten()
+        .collect()
+}
+
+fn invert_edges(
+    edges: &FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
+) -> FxHashMap<PackageId, Vec<(PackageId, DependencyType)>> {
+    let mut inverted = FxHashMap::<PackageId, Vec<(PackageId, DependencyType)>>::default();
+    for (&package_id, dependencies) in edges {
+        for &(dependency_id, kind) in dependencies {
+            inverted
+                .entry(dependency_id)
+                .or_default()
+                .push((package_id, kind));
+        }
+    }
+    for dependencies in inverted.values_mut() {
+        dependencies.sort_unstable();
+    }
+    inverted
 }
 
 /// Helper function to resolve the manifest path, handling absolute vs relative paths and
@@ -535,7 +674,7 @@ struct CollectedPackages {
 fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
     let capacity = resolved.packages.len();
     let mut remaining: Vec<PackageId> = Vec::with_capacity(capacity);
-    remaining.extend(resolved.workspace_ids.iter().copied());
+    remaining.extend(resolved.root_ids.iter().copied());
 
     let mut nodes: Vec<DependencyNode> = Vec::with_capacity(capacity);
     let mut pkg_index: FxHashMap<PackageId, NodeId> =
@@ -560,7 +699,7 @@ fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
     }
 
     let roots = resolved
-        .workspace_ids
+        .root_ids
         .iter()
         .filter_map(|pkg_id| pkg_index.get(pkg_id).copied())
         .collect();
