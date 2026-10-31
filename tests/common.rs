@@ -30,6 +30,7 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
             TestNodeKind::Crate => DependencyNode::Crate(Dependency {
                 name: node.name.into(),
                 version: "".into(),
+                package_id: None,
                 manifest_dir: None,
                 is_proc_macro: false,
                 format_metadata: None,

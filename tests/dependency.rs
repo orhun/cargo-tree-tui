@@ -352,6 +352,7 @@ fn as_dependency_returns_some_for_crate() {
     let dep = DependencyNode::Crate(Dependency {
         name: "foo".into(),
         version: "1.0.0".into(),
+        package_id: None,
         manifest_dir: None,
         is_proc_macro: false,
         format_metadata: None,
@@ -378,6 +379,7 @@ fn display_name_for_crate_and_group() {
     let crate_node = DependencyNode::Crate(Dependency {
         name: "serde".into(),
         version: "1.0.0".into(),
+        package_id: None,
         manifest_dir: None,
         is_proc_macro: false,
         format_metadata: None,

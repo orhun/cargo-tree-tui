@@ -33,19 +33,20 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
     state.advance_spinner();
+    let prompt = if matches!(
+        state.input_mode,
+        InputMode::Search | InputMode::SearchResults
+    ) {
+        Some((state.search_query.as_str(), state.search_prompt_symbol()))
+    } else {
+        state.invert_prompt.as_deref().map(|prompt| (prompt, '!'))
+    };
 
     let tree_widget = TreeWidget::new(&state.dependency_tree)
         .prefix(state.prefix)
         .charset(state.charset)
         .format(&state.format)
-        .search_query(
-            matches!(
-                state.input_mode,
-                InputMode::Search | InputMode::SearchResults
-            )
-            .then_some(state.search_query.as_str()),
-        )
-        .search_prompt_symbol(state.search_prompt_symbol())
+        .prompt(prompt)
         .scrollbar(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .track_symbol(Some("┆"))

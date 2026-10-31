@@ -186,6 +186,7 @@ mod tests {
         Dependency {
             name: "demo".to_owned(),
             version: "1.2.3".to_owned(),
+            package_id: None,
             manifest_dir: None,
             is_proc_macro: false,
             format_metadata: format_metadata.map(Arc::new),

@@ -626,6 +626,7 @@ fn large_dag_no_oom() {
     arena.push(DependencyNode::Crate(Dependency {
         name: "root".into(),
         version: "0.1.0".into(),
+        package_id: None,
         manifest_dir: None,
         is_proc_macro: false,
         format_metadata: None,
@@ -637,6 +638,7 @@ fn large_dag_no_oom() {
         arena.push(DependencyNode::Crate(Dependency {
             name: format!("a{i}"),
             version: "0.1.0".into(),
+            package_id: None,
             manifest_dir: None,
             is_proc_macro: false,
             format_metadata: None,
@@ -649,6 +651,7 @@ fn large_dag_no_oom() {
         arena.push(DependencyNode::Crate(Dependency {
             name: format!("b{i}"),
             version: "0.1.0".into(),
+            package_id: None,
             manifest_dir: None,
             is_proc_macro: false,
             format_metadata: None,
@@ -660,6 +663,7 @@ fn large_dag_no_oom() {
         arena.push(DependencyNode::Crate(Dependency {
             name: format!("c{i}"),
             version: "0.1.0".into(),
+            package_id: None,
             manifest_dir: None,
             is_proc_macro: false,
             format_metadata: None,

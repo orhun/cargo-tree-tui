@@ -68,6 +68,8 @@ pub struct Dependency {
     pub name: String,
     /// Crate version.
     pub version: String,
+    /// Cargo package identity, including its source.
+    pub package_id: Option<PackageId>,
     /// Local manifest directory (only for workspace members).
     pub manifest_dir: Option<String>,
     /// Whether this crate exposes a proc-macro target.
@@ -83,6 +85,7 @@ impl From<&PackageSnapshot> for Dependency {
         Dependency {
             name: snapshot.name.clone(),
             version: snapshot.version.clone(),
+            package_id: Some(snapshot.package_id),
             manifest_dir: snapshot.manifest_dir.clone(),
             is_proc_macro: snapshot.is_proc_macro,
             format_metadata: snapshot.format_metadata.clone(),
@@ -472,6 +475,7 @@ impl EdgeKinds {
 pub struct PackageSnapshot {
     name: String,
     version: String,
+    package_id: PackageId,
     manifest_dir: Option<String>,
     is_proc_macro: bool,
     format_metadata: Option<Arc<PackageFormatMetadata>>,
@@ -524,6 +528,7 @@ impl PackageSnapshot {
         Self {
             name: package.name().as_str().to_owned(),
             version: package.version().to_string(),
+            package_id,
             manifest_dir,
             is_proc_macro: package.proc_macro(),
             format_metadata,
