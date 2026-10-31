@@ -1,6 +1,18 @@
 use clap_cargo::style::{DEP_BUILD, DEP_FEATURE, NOP, PLACEHOLDER, WARN};
 use ratatui::style::{Modifier, Style};
 
+/// How structural prefixes are displayed before each tree row.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TreePrefix {
+    /// Draw branch connectors and indentation.
+    #[default]
+    Indent,
+    /// Print the package dependency depth.
+    Depth,
+    /// Draw no structural prefix.
+    None,
+}
+
 /// Visual configuration for [`TreeWidget`](super::TreeWidget).
 #[derive(Debug)]
 pub struct TreeWidgetStyle {

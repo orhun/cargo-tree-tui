@@ -22,7 +22,7 @@ impl Command {
     }
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum Prefix {
     Depth,
     Indent,
@@ -93,9 +93,9 @@ pub struct TreeArgs {
     #[arg(long = "prefix-depth", hide = true)]
     pub prefix_depth: bool,
 
-    /// Change the prefix (indentation) of how each entry is displayed
-    #[arg(long = "prefix", value_name = "PREFIX", value_enum, default_value_t = Prefix::Indent)]
-    pub prefix: Prefix,
+    /// Change how each entry is prefixed (default: indent)
+    #[arg(long = "prefix", value_name = "PREFIX", value_enum)]
+    pub prefix: Option<Prefix>,
 
     /// Do not de-duplicate (repeats all shared dependencies)
     #[arg(long = "no-dedupe")]

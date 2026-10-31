@@ -13,7 +13,7 @@ use self::{breadcrumb::Breadcrumb, render::RenderContext};
 pub use self::{
     render::RenderOutput,
     state::{SearchState, TreeWidgetState, VisIdx},
-    style::TreeWidgetStyle,
+    style::{TreePrefix, TreeWidgetStyle},
 };
 
 mod breadcrumb;
@@ -33,6 +33,7 @@ pub struct TreeWidget<'a> {
     search_query: Option<&'a str>,
     search_prompt_symbol: char,
     style: TreeWidgetStyle,
+    prefix: TreePrefix,
 }
 
 impl<'a> TreeWidget<'a> {
@@ -44,6 +45,7 @@ impl<'a> TreeWidget<'a> {
             search_query: None,
             search_prompt_symbol: '/',
             style: TreeWidgetStyle::default(),
+            prefix: TreePrefix::default(),
         }
     }
 
@@ -66,6 +68,11 @@ impl<'a> TreeWidget<'a> {
         self.search_prompt_symbol = search_prompt_symbol;
         self
     }
+
+    pub fn prefix(mut self, prefix: TreePrefix) -> Self {
+        self.prefix = prefix;
+        self
+    }
 }
 
 impl StatefulWidget for TreeWidget<'_> {
@@ -83,7 +90,7 @@ impl StatefulWidget for TreeWidget<'_> {
             total_lines,
             viewport,
         } = {
-            let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref);
+            let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref, self.prefix);
             ctx.render(area)
         };
 

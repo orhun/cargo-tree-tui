@@ -12,6 +12,8 @@ pub struct Lineage {
     pub is_last: bool,
     /// Whether this node is the currently selected one.
     pub is_selected: bool,
+    /// Number of package ancestors, excluding synthetic dependency groups.
+    pub package_depth: Option<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -23,23 +25,28 @@ pub struct LineageSegment {
 
 impl Lineage {
     /// Builds lineage information for a visible node position.
-    pub fn build(
+    pub fn build<const TRACK_PACKAGE_DEPTH: bool>(
         tree: &DependencyTree,
         visible_nodes: &[VisibleNode],
         vis_idx: VisIdx,
         selected_vis_idx: Option<VisIdx>,
     ) -> Option<Self> {
         let vnode = visible_nodes.get(vis_idx.0)?;
-        tree.node(vnode.id)?;
+        let node = tree.node(vnode.id)?;
+        let is_group = TRACK_PACKAGE_DEPTH && node.is_group();
 
         let is_last = vnode.is_last_non_group_child;
 
+        let mut package_depth = TRACK_PACKAGE_DEPTH.then_some(0usize);
         let mut lineage = Vec::new();
         let mut current_vis = vnode.parent_vis_idx;
 
         while let Some(ancestor_vis) = current_vis {
             let ancestor_vnode = visible_nodes.get(ancestor_vis.0)?;
             let ancestor = tree.node(ancestor_vnode.id)?;
+            if TRACK_PACKAGE_DEPTH && !ancestor.is_group() {
+                *package_depth.as_mut()? += 1;
+            }
 
             if let Some(grand_vis) = ancestor_vnode.parent_vis_idx {
                 let has_more_siblings = !ancestor_vnode.is_last_non_group_child;
@@ -57,10 +64,14 @@ impl Lineage {
         }
 
         lineage.reverse();
+        if is_group {
+            package_depth = package_depth.map(|depth| depth.saturating_sub(1));
+        }
         Some(Lineage {
             segments: lineage,
             is_last,
             is_selected: selected_vis_idx == Some(vis_idx),
+            package_depth,
         })
     }
 }
