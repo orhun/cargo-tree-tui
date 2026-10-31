@@ -6,7 +6,7 @@ use ratatui::{
     widgets::{Block, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget},
 };
 
-use crate::{core::DependencyTree, ops::tree::tui::widget::viewport::Viewport};
+use crate::ops::tree::tui::{TuiTree, widget::viewport::Viewport};
 
 use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
@@ -27,7 +27,7 @@ mod viewport;
 /// A tree widget for displaying hierarchical dependencies.
 #[derive(Debug)]
 pub struct TreeWidget<'a> {
-    tree: &'a DependencyTree,
+    tree: &'a TuiTree,
     block: Option<Block<'a>>,
     scrollbar: Option<Scrollbar<'a>>,
     search_query: Option<&'a str>,
@@ -36,7 +36,7 @@ pub struct TreeWidget<'a> {
 }
 
 impl<'a> TreeWidget<'a> {
-    pub fn new(tree: &'a DependencyTree) -> Self {
+    pub fn new(tree: &'a TuiTree) -> Self {
         Self {
             tree,
             block: None,

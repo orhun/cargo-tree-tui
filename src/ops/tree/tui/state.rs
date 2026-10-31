@@ -1,8 +1,8 @@
-use std::sync::mpsc::Sender;
+use std::sync::{Arc, mpsc::Sender};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
-use crate::core::DependencyTree;
+use super::TuiTree;
 
 use super::widget::{SearchState, TreeWidgetState};
 
@@ -35,7 +35,7 @@ pub struct SearchResult {
 #[derive(Debug)]
 pub struct TuiState {
     pub running: bool,
-    pub dependency_tree: DependencyTree,
+    pub dependency_tree: Arc<TuiTree>,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
     pub input_mode: InputMode,
@@ -48,7 +48,7 @@ pub struct TuiState {
 
 impl TuiState {
     pub fn new(
-        dependency_tree: DependencyTree,
+        dependency_tree: Arc<TuiTree>,
         search_tx: Sender<SearchRequest>,
         depth: Option<usize>,
     ) -> Self {

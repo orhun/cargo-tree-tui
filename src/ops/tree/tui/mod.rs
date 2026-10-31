@@ -1,6 +1,9 @@
 pub mod help;
 pub mod state;
+pub(crate) mod tree;
 pub mod widget;
+
+pub use tree::TuiTree;
 
 use clap_cargo::style::{HEADER, USAGE};
 use ratatui::{

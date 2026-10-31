@@ -1,10 +1,11 @@
-use std::{sync::mpsc, thread, time::Duration};
+use std::{sync::Arc, sync::mpsc, thread, time::Duration};
 
 use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent};
 
 use cargo_tree_tui::{
-    core::{DependencyTree, ResolutionOptions},
+    core::ResolutionOptions,
+    ops::tree::tui::TuiTree,
     ops::tree::tui::{
         draw_tui,
         state::{Event, SearchRequest, SearchResult, TuiState},
@@ -16,6 +17,7 @@ use crate::cli::TreeArgs;
 
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
+    let no_dedupe = args.no_dedupe || args.all;
     let resolution_options = ResolutionOptions {
         workspace: args.workspace,
         packages: args.package,
@@ -23,6 +25,8 @@ pub fn run(args: TreeArgs) -> Result<()> {
         edges: args.edges,
         no_dev_dependencies: args.no_dev_dependencies,
         prune: args.prune,
+        invert: args.invert,
+        duplicates: args.duplicates,
         depth: args.depth,
         targets: args.target,
         all_targets: args.all_targets,
@@ -30,12 +34,17 @@ pub fn run(args: TreeArgs) -> Result<()> {
         all_features: args.all_features,
         no_default_features: args.no_default_features,
     };
-    let dependency_tree =
-        DependencyTree::load_with_options(args.manifest_path, &resolution_options)?;
+    let dependency_tree = Arc::new(TuiTree::new(
+        cargo_tree_tui::core::DependencyTree::load_with_options(
+            args.manifest_path,
+            &resolution_options,
+        )?,
+        no_dedupe,
+    ));
 
     let (search_tx, search_rx) = mpsc::channel::<SearchRequest>();
     let (event_tx, event_rx) = mpsc::channel::<Event>();
-    let worker_tree = dependency_tree.clone();
+    let worker_tree = Arc::clone(&dependency_tree);
     let worker_handle = thread::spawn(move || search_worker(worker_tree, search_rx, event_tx));
 
     let mut state = TuiState::new(dependency_tree, search_tx, resolution_options.depth);
@@ -62,7 +71,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
 }
 
 fn search_worker(
-    dependency_tree: DependencyTree,
+    dependency_tree: Arc<TuiTree>,
     search_rx: mpsc::Receiver<SearchRequest>,
     event_tx: mpsc::Sender<Event>,
 ) {

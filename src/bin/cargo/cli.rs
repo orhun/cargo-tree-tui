@@ -68,8 +68,14 @@ pub struct TreeArgs {
     pub edges: Vec<String>,
 
     /// Invert the tree direction and focus on the given package
-    #[arg(short = 'i', long = "invert", value_name = "SPEC", action = ArgAction::Append)]
-    pub invert: Vec<String>,
+    #[arg(
+        short = 'i',
+        long = "invert",
+        value_name = "SPEC",
+        num_args = 0..,
+        action = ArgAction::Append
+    )]
+    pub invert: Option<Vec<String>>,
 
     /// Prune the given package from the display of the dependency tree
     #[arg(long = "prune", value_name = "SPEC")]
