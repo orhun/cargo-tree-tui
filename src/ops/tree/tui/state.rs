@@ -5,7 +5,9 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::TuiTree;
 use super::selector::{SelectorOption, SelectorState};
-use crate::core::dependency::{DependencyType, workspace_features, workspace_packages};
+use crate::core::dependency::{
+    DependencyNode, DependencyType, workspace_features, workspace_packages,
+};
 use crate::core::{PackageFormatRequirements, ResolutionOptions};
 
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
@@ -92,10 +94,15 @@ pub struct TuiState {
     pub input_mode: InputMode,
     pub search_query: String,
     pub search_running: bool,
+    invert_restore: Option<Option<Vec<String>>>,
+    invert_target: Option<String>,
+    pub(crate) invert_prompt: Option<String>,
+    invert_reverting: bool,
     spinner_frame: usize,
     search_generation: u64,
     search_tx: Sender<SearchRequest>,
     resolution_generation: u64,
+    resolution_applying: bool,
     resolution_tx: Sender<TreeResolutionRequest>,
     resolution_resume_tx: Sender<()>,
 }
@@ -132,19 +139,26 @@ impl TuiState {
             input_mode: InputMode::Normal,
             search_query: String::new(),
             search_running: false,
+            invert_restore: None,
+            invert_target: None,
+            invert_prompt: None,
+            invert_reverting: false,
             spinner_frame: 0,
             search_generation: 0,
             search_tx: channels.search,
             resolution_generation: 0,
+            resolution_applying: false,
             resolution_tx: channels.resolution,
             resolution_resume_tx: channels.resolution_resume,
         }
     }
 
     pub fn resolution_pending(&self) -> bool {
-        self.selector
-            .as_ref()
-            .is_some_and(|selector| selector.applying)
+        self.resolution_applying
+            || self
+                .selector
+                .as_ref()
+                .is_some_and(|selector| selector.applying)
     }
 
     pub fn resume_resolution(&self) {
@@ -220,6 +234,9 @@ impl TuiState {
             (KeyCode::Esc, _) if self.input_mode == InputMode::SearchResults => {
                 self.clear_search();
             }
+            (KeyCode::Esc, _) if self.invert_restore.is_some() => {
+                self.restore_inverted_tree();
+            }
             (KeyCode::Char('q'), _) => {
                 self.running = false;
             }
@@ -240,6 +257,9 @@ impl TuiState {
             }
             (KeyCode::Char('p'), _) => {
                 self.open_package_selector();
+            }
+            (KeyCode::Char('i'), _) => {
+                self.invert_selected_package();
             }
             (KeyCode::Char('P'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
@@ -717,6 +737,7 @@ impl TuiState {
 
         match result.result {
             Ok(dependency_tree) => {
+                self.resolution_applying = false;
                 self.search_generation = self.search_generation.wrapping_add(1);
                 self.search_query.clear();
                 self.search_running = false;
@@ -732,8 +753,21 @@ impl TuiState {
                 self.selector = None;
                 self.selector_kind = None;
                 self.input_mode = InputMode::Normal;
+                if self.invert_reverting {
+                    self.invert_restore = None;
+                    self.invert_target = None;
+                    self.invert_prompt = None;
+                    self.invert_reverting = false;
+                }
             }
             Err(error) => {
+                self.resolution_applying = false;
+                self.invert_reverting = false;
+                if self.invert_restore.is_some() {
+                    if let Some(target) = &self.invert_target {
+                        self.invert_prompt = Some(format!("{target} ({error})"));
+                    }
+                }
                 if let Some(selector) = self.selector.as_mut() {
                     selector.applying = false;
                     selector.message = Some(error);
@@ -766,6 +800,59 @@ impl TuiState {
         self.search_query.clear();
         self.search_running = false;
         self.tree_widget_state.clear_search();
+    }
+
+    fn invert_selected_package(&mut self) {
+        let Some(node_id) = self.tree_widget_state.selected_node_id() else {
+            return;
+        };
+        let Some(DependencyNode::Crate(dependency)) = self.dependency_tree.node(node_id) else {
+            return;
+        };
+
+        let Some(package_id) = dependency.package_id else {
+            return;
+        };
+        let package_spec = package_id.to_spec().to_string();
+        if self.invert_restore.is_none() {
+            self.invert_restore = Some(self.tree_options.resolution.invert.clone());
+        }
+        let target = format!("{} v{}", dependency.name, dependency.version);
+        self.invert_target = Some(target.clone());
+        self.invert_prompt = Some(target.clone());
+        self.invert_reverting = false;
+
+        let mut options = self.tree_options.clone();
+        options.resolution.invert = Some(vec![package_spec]);
+        self.send_resolution(options);
+    }
+
+    fn restore_inverted_tree(&mut self) {
+        let Some(original_invert) = self.invert_restore.clone() else {
+            return;
+        };
+        let mut options = self.tree_options.clone();
+        options.resolution.invert = original_invert;
+        self.invert_reverting = true;
+        self.send_resolution(options);
+    }
+
+    fn send_resolution(&mut self, options: TreeOptions) {
+        self.resolution_generation = self.resolution_generation.wrapping_add(1);
+        let request = TreeResolutionRequest {
+            generation: self.resolution_generation,
+            format_requirements: self.format.requirements(),
+            options,
+        };
+        if self.resolution_tx.send(request).is_ok() {
+            self.resolution_applying = true;
+        } else {
+            self.invert_reverting = false;
+            if let Some(target) = &self.invert_target {
+                self.invert_prompt =
+                    Some(format!("{target} (could not start dependency resolution)"));
+            }
+        }
     }
 }
 

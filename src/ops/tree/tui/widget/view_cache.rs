@@ -500,6 +500,7 @@ mod tests {
                 DependencyNode::Crate(Dependency {
                     name: String::from(*name),
                     version: String::from("0.0.0"),
+                    package_id: None,
                     manifest_dir: None,
                     is_proc_macro: false,
                     format_metadata: None,

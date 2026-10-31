@@ -32,8 +32,7 @@ pub struct TreeWidget<'a> {
     tree: &'a TuiTree,
     block: Option<Block<'a>>,
     scrollbar: Option<Scrollbar<'a>>,
-    search_query: Option<&'a str>,
-    search_prompt_symbol: char,
+    prompt: Option<(&'a str, char)>,
     format: Option<&'a TreeFormat>,
     style: TreeWidgetStyle,
     prefix: TreePrefix,
@@ -45,8 +44,7 @@ impl<'a> TreeWidget<'a> {
             tree,
             block: None,
             scrollbar: None,
-            search_query: None,
-            search_prompt_symbol: '/',
+            prompt: None,
             format: None,
             style: TreeWidgetStyle::default(),
             prefix: TreePrefix::default(),
@@ -63,13 +61,8 @@ impl<'a> TreeWidget<'a> {
         self
     }
 
-    pub fn search_query(mut self, search_query: Option<&'a str>) -> Self {
-        self.search_query = search_query;
-        self
-    }
-
-    pub fn search_prompt_symbol(mut self, search_prompt_symbol: char) -> Self {
-        self.search_prompt_symbol = search_prompt_symbol;
+    pub fn prompt(mut self, prompt: Option<(&'a str, char)>) -> Self {
+        self.prompt = prompt;
         self
     }
 
@@ -145,7 +138,7 @@ impl StatefulWidget for TreeWidget<'_> {
             None
         };
 
-        let search_area = if self.search_query.is_some() && content_area.height > 0 {
+        let prompt_area = if self.prompt.is_some() && content_area.height > 0 {
             content_area.height = content_area.height.saturating_sub(1);
             Some(Rect {
                 y: content_area.y.saturating_add(content_area.height),
@@ -168,12 +161,12 @@ impl StatefulWidget for TreeWidget<'_> {
                 .render(content_area, buf);
         }
 
-        if let Some(area) = search_area
-            && let Some(search_query) = self.search_query
+        if let Some(area) = prompt_area
+            && let Some((prompt_text, prompt_symbol)) = self.prompt
         {
             let search_text = Line::from(vec![
-                Span::raw(self.search_prompt_symbol.to_string()).bold(),
-                Span::raw(search_query),
+                Span::raw(prompt_symbol.to_string()).bold(),
+                Span::raw(prompt_text),
             ]);
             Paragraph::new(search_text)
                 .style(self.style.style)

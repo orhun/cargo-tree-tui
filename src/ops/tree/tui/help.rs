@@ -10,6 +10,7 @@ use ratatui::{
 const KEY_BINDINGS: &[(&str, &str)] = &[
     ("?", "Show this popup"),
     ("/", "Search"),
+    ("i", "Invert selected"),
     ("e", "Select dependency edge kinds"),
     ("t", "Select target triples"),
     ("f", "Select features"),
