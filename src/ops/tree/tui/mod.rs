@@ -1,4 +1,5 @@
 pub mod help;
+pub mod selector;
 pub mod state;
 pub(crate) mod tree;
 pub mod widget;
@@ -15,6 +16,7 @@ use ratatui::{
 };
 
 use help::HelpPopup;
+use selector::{SelectorPopup, SelectorState};
 use state::{InputMode, TuiState};
 use widget::TreeWidget;
 
@@ -23,6 +25,9 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
     draw_help_text(frame, frame.area());
     if state.show_help {
         draw_help_popup(frame);
+    }
+    if let Some(selector) = &state.selector {
+        draw_selector_popup(frame, frame.area(), selector);
     }
 }
 
@@ -93,4 +98,8 @@ pub fn draw_help_popup(frame: &mut Frame) {
     };
     let area = frame.area().clamp(area);
     frame.render_widget(help_popup, area);
+}
+
+pub fn draw_selector_popup(frame: &mut Frame, area: Rect, selector: &SelectorState) {
+    frame.render_widget(SelectorPopup::new(selector), area);
 }
