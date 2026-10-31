@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use cargo::{
     GlobalContext,
     core::{
-        Package, PackageId, Workspace,
+        Package, PackageId, PackageIdSpecQuery, Workspace,
         compiler::{CompileKind, RustcTargetData},
         dependency::DepKind,
         resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
@@ -228,6 +228,12 @@ impl DependencyTree {
 /// present in the dependency tree.
 #[derive(Debug, Default)]
 pub struct ResolutionOptions {
+    /// Resolve the tree for all workspace members.
+    pub workspace: bool,
+    /// Resolve the tree for the selected packages.
+    pub packages: Vec<String>,
+    /// Exclude workspace members when `workspace` is enabled.
+    pub exclude: Vec<String>,
     /// Explicit target triples. The special value `all` is handled like
     /// `--all-targets`.
     pub targets: Vec<String>,
@@ -300,9 +306,15 @@ impl ResolvedWorkspace {
 
         let mut target_data =
             RustcTargetData::new(&ws, &requested_kinds).context("failed to load target data")?;
-        let specs = ops::Packages::All(Vec::new())
+        let packages = ops::Packages::from_flags(
+            options.workspace,
+            options.exclude.clone(),
+            options.packages.clone(),
+        )
+        .context("failed to select Cargo packages")?;
+        let specs = packages
             .to_package_id_specs(&ws)
-            .context("failed to resolve workspace package specs")?;
+            .context("failed to resolve selected package specs")?;
         let cli_features = CliFeatures::from_command_line(
             &options.features,
             options.all_features,
@@ -370,7 +382,16 @@ impl ResolvedWorkspace {
             edges.insert(pkg_id, classified);
         }
 
-        let workspace_ids = ws.members().map(|pkg| pkg.package_id()).collect();
+        let workspace_ids = ws
+            .members()
+            .filter_map(|pkg| {
+                let package_id = pkg.package_id();
+                specs
+                    .iter()
+                    .any(|spec| spec.matches(package_id))
+                    .then_some(package_id)
+            })
+            .collect();
 
         Ok(ResolvedWorkspace {
             workspace_name,
