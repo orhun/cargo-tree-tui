@@ -1,7 +1,10 @@
 use cargo_tree_tui::core::dependency::DependencyType;
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
+use cargo_tree_tui::ops::tree::tui::TuiTree;
 use cargo_tree_tui::ops::tree::tui::widget::render::RenderContext;
-use cargo_tree_tui::ops::tree::tui::widget::{TreeWidget, TreeWidgetState, TreeWidgetStyle};
+use cargo_tree_tui::ops::tree::tui::widget::{
+    TreePrefix, TreeWidget, TreeWidgetState, TreeWidgetStyle,
+};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::layout::Rect;
@@ -29,6 +32,7 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
                 version: "".into(),
                 manifest_dir: None,
                 is_proc_macro: false,
+                format_metadata: None,
                 children,
             }),
             TestNodeKind::Group(kind) => DependencyNode::Group(DependencyGroup { kind, children }),
@@ -60,8 +64,9 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
 }
 
 pub fn render_tree_context(tree: &DependencyTree) -> String {
+    let tree = TuiTree::new(tree.clone(), true);
     let mut state = TreeWidgetState::default();
-    state.expand_all(tree);
+    state.expand_all(&tree);
 
     let area = Rect {
         x: 0,
@@ -71,7 +76,8 @@ pub fn render_tree_context(tree: &DependencyTree) -> String {
     };
 
     let style = TreeWidgetStyle::default();
-    let mut context = RenderContext::new(tree, &mut state, &style, None);
+    let mut context =
+        RenderContext::new(&tree, &mut state, &style, None, TreePrefix::default(), None);
     let output = context.render(area);
 
     output
@@ -87,11 +93,12 @@ pub fn render_tree_widget(
     state: &mut TreeWidgetState,
     area: Rect,
 ) -> String {
+    let tree = TuiTree::new(tree.clone(), true);
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
     terminal
         .draw(|frame| {
             let frame_area = frame.area();
-            TreeWidget::new(tree).render(frame_area, frame.buffer_mut(), state);
+            TreeWidget::new(&tree).render(frame_area, frame.buffer_mut(), state);
         })
         .unwrap();
     terminal

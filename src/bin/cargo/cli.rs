@@ -138,8 +138,14 @@ pub struct TreeArgs {
     #[arg(long = "no-default-features")]
     pub no_default_features: bool,
 
-    /// Space-separated list of features to activate
-    #[arg(short = 'F', long = "features", value_delimiter = ',')]
+    /// Space- or comma-separated list of features to activate
+    #[arg(
+        short = 'F',
+        long = "features",
+        value_delimiter = ',',
+        num_args = 1..,
+        action = ArgAction::Append
+    )]
     pub features: Vec<String>,
 
     /// Deprecated, use --target=all instead
@@ -163,4 +169,23 @@ pub struct TreeArgs {
 fn verify_app() {
     use clap::CommandFactory;
     Command::command().debug_assert();
+}
+
+#[test]
+fn features_accept_space_and_comma_separated_values() {
+    let args = match Command::try_parse_from([
+        "cargo",
+        "tree-tui",
+        "--features",
+        "first",
+        "second,third",
+        "-F",
+        "fourth",
+    ])
+    .unwrap()
+    {
+        Command::TreeTui(args) => args,
+    };
+
+    assert_eq!(args.features, ["first", "second", "third", "fourth"]);
 }
