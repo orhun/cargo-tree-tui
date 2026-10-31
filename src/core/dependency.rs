@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use cargo::{
     GlobalContext,
     core::{
-        Package, PackageId, PackageIdSpec, PackageIdSpecQuery, Workspace,
+        FeatureValue, Package, PackageId, PackageIdSpec, PackageIdSpecQuery, Workspace,
         compiler::{CompileKind, RustcTargetData},
         dependency::DepKind,
         resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
@@ -120,6 +120,14 @@ pub struct DependencyGroup {
     pub children: Vec<NodeId>,
 }
 
+/// Feature node linking a package to an enabled feature or dependency feature.
+#[derive(Debug, Clone)]
+pub struct DependencyFeature {
+    pub name: String,
+    pub command_line: bool,
+    pub children: Vec<NodeId>,
+}
+
 impl DependencyGroup {
     pub fn label(&self) -> &'static str {
         self.kind.label()
@@ -131,6 +139,7 @@ impl DependencyGroup {
 pub enum DependencyNode {
     Crate(Dependency),
     Group(DependencyGroup),
+    Feature(DependencyFeature),
 }
 
 impl DependencyNode {
@@ -138,6 +147,7 @@ impl DependencyNode {
         match self {
             Self::Crate(node) => &node.children,
             Self::Group(node) => &node.children,
+            Self::Feature(node) => &node.children,
         }
     }
 
@@ -145,10 +155,15 @@ impl DependencyNode {
         matches!(self, Self::Group(_))
     }
 
+    pub fn is_crate(&self) -> bool {
+        matches!(self, Self::Crate(_))
+    }
+
     pub fn display_name(&self) -> &str {
         match self {
             Self::Crate(node) => node.name.as_str(),
             Self::Group(node) => node.label(),
+            Self::Feature(node) => node.name.as_str(),
         }
     }
 
@@ -232,7 +247,11 @@ impl DependencyTree {
         let resolved = ResolvedWorkspace::load(manifest_path, options, format_requirements)?;
         let workspace_name = resolved.workspace_name.clone();
         let mut collected = collect_packages(&resolved);
-        let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
+        let parents = if resolved.show_features {
+            wire_feature_edges(&resolved, &collected.pkg_index, &mut collected.nodes)
+        } else {
+            wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes)
+        };
         let tree = DependencyTree {
             workspace_name,
             parents,
@@ -257,7 +276,7 @@ impl DependencyTree {
         self.nodes
             .iter()
             .enumerate()
-            .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
+            .filter_map(|(idx, node)| node.is_crate().then_some(NodeId(idx)))
     }
 }
 
@@ -301,6 +320,9 @@ struct EdgeKinds {
     normal: bool,
     build: bool,
     dev: bool,
+    public: bool,
+    no_proc_macro: bool,
+    features: bool,
 }
 
 impl EdgeKinds {
@@ -310,14 +332,24 @@ impl EdgeKinds {
             kinds.push("no-dev");
         }
 
-        for kind in &kinds {
-            if matches!(*kind, "all" | "features" | "public" | "no-proc-macro") {
-                bail!("`--edges={kind}` is not supported by cargo-tree-tui yet");
-            }
+        let public = kinds.contains(&"public");
+        let no_proc_macro = kinds.contains(&"no-proc-macro");
+        kinds.retain(|kind| !matches!(*kind, "public" | "no-proc-macro"));
+
+        let has_all = kinds.contains(&"all");
+        let features = kinds.contains(&"features") || has_all;
+        kinds.retain(|kind| !matches!(*kind, "features" | "all"));
+        if has_all {
+            kinds.extend(["normal", "build", "dev"]);
         }
 
         if kinds.is_empty() {
-            return Ok(Self::all());
+            return Ok(Self {
+                public,
+                no_proc_macro,
+                features,
+                ..Self::all()
+            });
         }
 
         let has_negative = kinds.iter().any(|kind| kind.starts_with("no-"));
@@ -338,13 +370,21 @@ impl EdgeKinds {
                     _ => bail!("invalid dependency kind `{kind}`"),
                 }
             }
-            return Ok(selected);
+            return Ok(Self {
+                public,
+                no_proc_macro,
+                features,
+                ..selected
+            });
         }
 
         let mut selected = Self {
             normal: false,
             build: false,
             dev: false,
+            public,
+            no_proc_macro,
+            features,
         };
         for kind in kinds {
             match kind {
@@ -362,6 +402,9 @@ impl EdgeKinds {
             normal: true,
             build: true,
             dev: true,
+            public: false,
+            no_proc_macro: false,
+            features: false,
         }
     }
 
@@ -443,7 +486,34 @@ struct ResolvedWorkspace {
     packages: FxHashMap<PackageId, PackageSnapshot>,
     /// Deduplicated, classified outgoing edges keyed by source package.
     edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
+    /// Dependency declarations in manifest direction, used to expand feature definitions.
+    feature_dependencies: FxHashMap<PackageId, Vec<FeatureDependency>>,
+    /// Feature-bearing dependencies in display direction (reversed for `--invert`).
+    graph_feature_dependencies: FxHashMap<PackageId, Vec<FeatureDependency>>,
+    feature_map: FxHashMap<PackageId, FxHashMap<String, Vec<FeatureValue>>>,
+    cli_features: FxHashMap<PackageId, CliFeatures>,
+    show_features: bool,
+    inverted: bool,
     root_ids: Vec<PackageId>,
+}
+
+#[derive(Debug, Clone)]
+struct FeatureDependency {
+    package_id: PackageId,
+    kind: DependencyType,
+    name: String,
+    optional: bool,
+    uses_default_features: bool,
+    features: Vec<String>,
+}
+
+fn package_feature_map(package: &Package) -> FxHashMap<String, Vec<FeatureValue>> {
+    package
+        .summary()
+        .features()
+        .iter()
+        .map(|(name, values)| (name.to_string(), values.clone()))
+        .collect()
 }
 
 impl ResolvedWorkspace {
@@ -485,6 +555,9 @@ impl ResolvedWorkspace {
             .to_package_id_specs(&ws)
             .context("failed to resolve selected package specs")?;
         let edge_kinds = EdgeKinds::from_options(options)?;
+        if edge_kinds.features && options.duplicates {
+            bail!("the `-e features` flag does not support `--duplicates`");
+        }
         let prune_specs = options
             .prune
             .iter()
@@ -499,6 +572,14 @@ impl ResolvedWorkspace {
             !options.no_default_features,
         )
         .context("failed to parse Cargo features")?;
+        let cli_features_by_package = if edge_kinds.features {
+            ws.members_with_features(&specs, &cli_features)?
+                .into_iter()
+                .map(|(package, features)| (package.package_id(), features))
+                .collect()
+        } else {
+            FxHashMap::default()
+        };
         let ws_resolve = ops::resolve_ws_with_opts(
             &ws,
             &mut target_data,
@@ -531,12 +612,17 @@ impl ResolvedWorkspace {
         // member that also appears in pkg_set keeps its workspace identity),
         // then everything else from the resolved package set.
         let mut packages: FxHashMap<PackageId, PackageSnapshot> = FxHashMap::default();
+        let mut feature_map = FxHashMap::default();
         for pkg in ws.members() {
+            let package_id = pkg.package_id();
+            if edge_kinds.features {
+                feature_map.insert(package_id, package_feature_map(pkg));
+            }
             let features = format_requirements
                 .features
                 .then(|| {
                     resolve
-                        .features(pkg.package_id())
+                        .features(package_id)
                         .iter()
                         .map(ToString::to_string)
                         .collect::<Vec<_>>()
@@ -544,17 +630,23 @@ impl ResolvedWorkspace {
                 })
                 .filter(|features| !features.is_empty());
             packages.insert(
-                pkg.package_id(),
+                package_id,
                 PackageSnapshot::from_package(pkg, features, format_requirements),
             );
         }
         for pkg in pkg_set.packages() {
-            packages.entry(pkg.package_id()).or_insert_with(|| {
+            let package_id = pkg.package_id();
+            if edge_kinds.features {
+                feature_map
+                    .entry(package_id)
+                    .or_insert_with(|| package_feature_map(pkg));
+            }
+            packages.entry(package_id).or_insert_with(|| {
                 let features = format_requirements
                     .features
                     .then(|| {
                         resolve
-                            .features(pkg.package_id())
+                            .features(package_id)
                             .iter()
                             .map(ToString::to_string)
                             .collect::<Vec<_>>()
@@ -568,8 +660,11 @@ impl ResolvedWorkspace {
         // Build classified, kind-deduplicated edges keyed by source package.
         let mut edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>> =
             FxHashMap::default();
+        let mut feature_dependencies: FxHashMap<PackageId, Vec<FeatureDependency>> =
+            FxHashMap::default();
         for &pkg_id in packages.keys() {
             let mut classified: Vec<(PackageId, DependencyType)> = Vec::new();
+            let mut package_feature_dependencies = Vec::new();
             for (dep_id, deps) in resolve.deps(pkg_id) {
                 let mut seen_normal = false;
                 let mut seen_dev = false;
@@ -577,9 +672,36 @@ impl ResolvedWorkspace {
                 for dep in deps.iter() {
                     let kind = DependencyType::from(dep.kind());
                     if !edge_kinds.includes(kind)
+                        || (edge_kinds.public && !dep.is_public())
+                        || (edge_kinds.no_proc_macro
+                            && packages
+                                .get(&dep_id)
+                                .is_some_and(|package| package.is_proc_macro))
                         || prune_specs.iter().any(|spec| spec.matches(dep_id))
                     {
                         continue;
+                    }
+                    if edge_kinds.features {
+                        let feature_dependency = FeatureDependency {
+                            package_id: dep_id,
+                            kind,
+                            name: dep.name_in_toml().to_string(),
+                            optional: dep.is_optional(),
+                            uses_default_features: dep.uses_default_features(),
+                            features: dep.features().iter().map(ToString::to_string).collect(),
+                        };
+                        if !package_feature_dependencies.iter().any(
+                            |existing: &FeatureDependency| {
+                                existing.package_id == feature_dependency.package_id
+                                    && existing.kind == feature_dependency.kind
+                                    && existing.name == feature_dependency.name
+                                    && existing.uses_default_features
+                                        == feature_dependency.uses_default_features
+                                    && existing.features == feature_dependency.features
+                            },
+                        ) {
+                            package_feature_dependencies.push(feature_dependency);
+                        }
                     }
                     let already = match kind {
                         DependencyType::Normal => std::mem::replace(&mut seen_normal, true),
@@ -592,6 +714,9 @@ impl ResolvedWorkspace {
                 }
             }
             edges.insert(pkg_id, classified);
+            if edge_kinds.features {
+                feature_dependencies.insert(pkg_id, package_feature_dependencies);
+            }
         }
 
         let selected_roots: Vec<PackageId> = ws
@@ -648,10 +773,29 @@ impl ResolvedWorkspace {
             edges = invert_edges(&edges);
         }
 
+        feature_dependencies.retain(|package_id, dependencies| {
+            if !graph_scope.contains(package_id) {
+                return false;
+            }
+            dependencies.retain(|dependency| graph_scope.contains(&dependency.package_id));
+            true
+        });
+        let graph_feature_dependencies = if inverted {
+            invert_feature_dependencies(&feature_dependencies)
+        } else {
+            feature_dependencies.clone()
+        };
+
         Ok(ResolvedWorkspace {
             workspace_name,
             packages,
             edges,
+            feature_dependencies,
+            graph_feature_dependencies,
+            feature_map,
+            cli_features: cli_features_by_package,
+            show_features: edge_kinds.features,
+            inverted,
             root_ids: tree_roots,
         })
     }
@@ -745,6 +889,28 @@ fn invert_edges(
     }
     for dependencies in inverted.values_mut() {
         dependencies.sort_unstable();
+    }
+    inverted
+}
+
+fn invert_feature_dependencies(
+    dependencies: &FxHashMap<PackageId, Vec<FeatureDependency>>,
+) -> FxHashMap<PackageId, Vec<FeatureDependency>> {
+    let mut inverted = FxHashMap::<PackageId, Vec<FeatureDependency>>::default();
+    for (&source, edges) in dependencies {
+        for edge in edges {
+            inverted
+                .entry(edge.package_id)
+                .or_default()
+                .push(FeatureDependency {
+                    package_id: source,
+                    kind: edge.kind,
+                    name: edge.name.clone(),
+                    optional: edge.optional,
+                    uses_default_features: edge.uses_default_features,
+                    features: edge.features.clone(),
+                });
+        }
     }
     inverted
 }
@@ -878,6 +1044,454 @@ fn wire_edges(
     }
 
     parents
+}
+
+/// Wire package dependencies through feature nodes when Cargo feature edges
+/// are selected. Feature nodes are keyed by the package whose feature they
+/// describe, matching Cargo's tree graph identity.
+fn wire_feature_edges(
+    resolved: &ResolvedWorkspace,
+    pkg_index: &FxHashMap<PackageId, NodeId>,
+    nodes: &mut Vec<DependencyNode>,
+) -> Vec<Vec<NodeId>> {
+    let mut parents = vec![Vec::new(); nodes.len()];
+    let mut feature_index: FxHashMap<(PackageId, String), NodeId> = FxHashMap::default();
+    let mut pending_features = Vec::new();
+
+    for (&source_package, &source_id) in pkg_index {
+        let Some(edges) = resolved.edges.get(&source_package) else {
+            continue;
+        };
+        let mut feature_deps_by_edge: FxHashMap<
+            (PackageId, DependencyType),
+            Vec<&FeatureDependency>,
+        > = FxHashMap::default();
+        if let Some(feature_dependencies) = resolved.graph_feature_dependencies.get(&source_package)
+        {
+            for dependency in feature_dependencies {
+                feature_deps_by_edge
+                    .entry((dependency.package_id, dependency.kind))
+                    .or_default()
+                    .push(dependency);
+            }
+        }
+
+        let mut normal = Vec::new();
+        let mut dev = Vec::new();
+        let mut build = Vec::new();
+        for &(target_package, kind) in edges {
+            let target_id = match pkg_index.get(&target_package) {
+                Some(id) => *id,
+                None => continue,
+            };
+            let feature_deps = feature_deps_by_edge
+                .get(&(target_package, kind))
+                .into_iter()
+                .flatten();
+
+            let mut has_direct_edge = false;
+            let mut has_dependency_metadata = false;
+            for dependency in feature_deps {
+                has_dependency_metadata = true;
+                let mut requested_features = dependency.features.clone();
+                if dependency.uses_default_features {
+                    requested_features.push("default".to_owned());
+                }
+                requested_features.sort_unstable();
+                requested_features.dedup();
+                if requested_features.is_empty() {
+                    has_direct_edge = true;
+                }
+                for feature_name in requested_features {
+                    let feature_owner = if resolved.inverted {
+                        source_package
+                    } else {
+                        target_package
+                    };
+                    let feature_id = ensure_feature_node(
+                        feature_owner,
+                        feature_name,
+                        Some(target_id),
+                        nodes,
+                        &mut parents,
+                        &mut feature_index,
+                        &mut pending_features,
+                    );
+                    match kind {
+                        DependencyType::Normal => normal.push(feature_id),
+                        DependencyType::Dev => dev.push(feature_id),
+                        DependencyType::Build => build.push(feature_id),
+                    }
+                }
+            }
+
+            if has_direct_edge || !has_dependency_metadata {
+                match kind {
+                    DependencyType::Normal => normal.push(target_id),
+                    DependencyType::Dev => dev.push(target_id),
+                    DependencyType::Build => build.push(target_id),
+                }
+            }
+        }
+
+        normal.sort_unstable_by_key(|id| id.0);
+        normal.dedup();
+        dev.sort_unstable_by_key(|id| id.0);
+        dev.dedup();
+        build.sort_unstable_by_key(|id| id.0);
+        build.dedup();
+        for &child_id in &normal {
+            parents[child_id.0].push(source_id);
+        }
+        let mut children = normal;
+        for (kind, group_children) in [
+            (DependencyType::Dev, &mut dev),
+            (DependencyType::Build, &mut build),
+        ] {
+            if group_children.is_empty() {
+                continue;
+            }
+            let group_id = NodeId(nodes.len());
+            for &child in group_children.iter() {
+                parents[child.0].push(group_id);
+            }
+            nodes.push(DependencyNode::Group(DependencyGroup {
+                kind,
+                children: std::mem::take(group_children),
+            }));
+            parents.push(vec![source_id]);
+            children.push(group_id);
+        }
+        if let Some(DependencyNode::Crate(package)) = nodes.get_mut(source_id.0) {
+            package.children = children;
+        }
+    }
+
+    if resolved.show_features {
+        if resolved.inverted {
+            add_cli_feature_edges(
+                resolved,
+                pkg_index,
+                nodes,
+                &mut parents,
+                &mut feature_index,
+                &mut pending_features,
+            );
+        }
+        expand_internal_features(
+            resolved,
+            pkg_index,
+            nodes,
+            &mut parents,
+            &mut feature_index,
+            &mut pending_features,
+            resolved.inverted,
+        );
+    }
+    parents
+}
+
+#[allow(clippy::too_many_arguments)]
+fn ensure_feature_node(
+    owner: PackageId,
+    name: String,
+    package_child: Option<NodeId>,
+    nodes: &mut Vec<DependencyNode>,
+    parents: &mut Vec<Vec<NodeId>>,
+    feature_index: &mut FxHashMap<(PackageId, String), NodeId>,
+    pending: &mut Vec<(PackageId, String, NodeId)>,
+) -> NodeId {
+    let key = (owner, name.clone());
+    let feature_id = if let Some(&id) = feature_index.get(&key) {
+        id
+    } else {
+        let id = NodeId(nodes.len());
+        nodes.push(DependencyNode::Feature(DependencyFeature {
+            name: name.clone(),
+            command_line: false,
+            children: Vec::new(),
+        }));
+        parents.push(Vec::new());
+        feature_index.insert(key, id);
+        pending.push((owner, name, id));
+        id
+    };
+
+    if let Some(package_child) = package_child {
+        let children = match &mut nodes[feature_id.0] {
+            DependencyNode::Feature(feature) => &mut feature.children,
+            _ => unreachable!("feature index only contains feature nodes"),
+        };
+        if !children.contains(&package_child) {
+            children.push(package_child);
+            parents[package_child.0].push(feature_id);
+        }
+    }
+    feature_id
+}
+
+fn add_cli_feature_edges(
+    resolved: &ResolvedWorkspace,
+    pkg_index: &FxHashMap<PackageId, NodeId>,
+    nodes: &mut Vec<DependencyNode>,
+    parents: &mut Vec<Vec<NodeId>>,
+    feature_index: &mut FxHashMap<(PackageId, String), NodeId>,
+    pending: &mut Vec<(PackageId, String, NodeId)>,
+) {
+    for (&package_id, cli_features) in &resolved.cli_features {
+        if !pkg_index.contains_key(&package_id) {
+            continue;
+        }
+
+        let mut requested_features = Vec::new();
+        if cli_features.all_features {
+            if let Some(features) = resolved.feature_map.get(&package_id) {
+                requested_features.extend(features.keys().cloned());
+            }
+        }
+        if cli_features.uses_default_features {
+            requested_features.push("default".to_owned());
+        }
+        let mut dependency_features = Vec::new();
+        for feature in cli_features.features.iter() {
+            match feature {
+                FeatureValue::Feature(name) => requested_features.push(name.to_string()),
+                FeatureValue::DepFeature { .. } => dependency_features.push(feature),
+                FeatureValue::Dep { .. } => {}
+            }
+        }
+        requested_features.sort_unstable();
+        requested_features.dedup();
+
+        for name in requested_features {
+            let feature_id = ensure_feature_node(
+                package_id,
+                name,
+                None,
+                nodes,
+                parents,
+                feature_index,
+                pending,
+            );
+            mark_command_line_feature(feature_id, nodes);
+            add_package_feature_parent(package_id, feature_id, pkg_index, nodes, parents);
+        }
+
+        let Some(dependencies) = resolved.feature_dependencies.get(&package_id) else {
+            continue;
+        };
+        for feature in dependency_features {
+            let FeatureValue::DepFeature {
+                dep_name,
+                dep_feature,
+                weak,
+            } = feature
+            else {
+                unreachable!("only dependency features were collected")
+            };
+            for dependency in dependencies
+                .iter()
+                .filter(|dependency| dependency.name == dep_name.as_str())
+            {
+                if !pkg_index.contains_key(&dependency.package_id) {
+                    continue;
+                }
+                if dependency.optional && !weak {
+                    let feature_id = ensure_feature_node(
+                        package_id,
+                        dep_name.to_string(),
+                        None,
+                        nodes,
+                        parents,
+                        feature_index,
+                        pending,
+                    );
+                    mark_command_line_feature(feature_id, nodes);
+                    add_package_feature_parent(package_id, feature_id, pkg_index, nodes, parents);
+                }
+
+                let feature_id = ensure_feature_node(
+                    dependency.package_id,
+                    dep_feature.to_string(),
+                    None,
+                    nodes,
+                    parents,
+                    feature_index,
+                    pending,
+                );
+                mark_command_line_feature(feature_id, nodes);
+                add_package_feature_parent(
+                    dependency.package_id,
+                    feature_id,
+                    pkg_index,
+                    nodes,
+                    parents,
+                );
+            }
+        }
+    }
+}
+
+fn mark_command_line_feature(feature_id: NodeId, nodes: &mut [DependencyNode]) {
+    if let Some(DependencyNode::Feature(feature)) = nodes.get_mut(feature_id.0) {
+        feature.command_line = true;
+    }
+}
+
+fn expand_internal_features(
+    resolved: &ResolvedWorkspace,
+    pkg_index: &FxHashMap<PackageId, NodeId>,
+    nodes: &mut Vec<DependencyNode>,
+    parents: &mut Vec<Vec<NodeId>>,
+    feature_index: &mut FxHashMap<(PackageId, String), NodeId>,
+    pending: &mut Vec<(PackageId, String, NodeId)>,
+    inverted: bool,
+) {
+    let mut processed = FxHashSet::default();
+    while let Some((package_id, feature_name, from_id)) = pending.pop() {
+        if !processed.insert((package_id, feature_name.clone())) {
+            continue;
+        }
+        let Some(values) = resolved
+            .feature_map
+            .get(&package_id)
+            .and_then(|features| features.get(&feature_name))
+        else {
+            continue;
+        };
+
+        for value in values {
+            match value {
+                FeatureValue::Feature(name) => {
+                    let Some(&package_child) = pkg_index.get(&package_id) else {
+                        continue;
+                    };
+                    let child_id = ensure_feature_node(
+                        package_id,
+                        name.to_string(),
+                        (!inverted).then_some(package_child),
+                        nodes,
+                        parents,
+                        feature_index,
+                        pending,
+                    );
+                    if inverted {
+                        add_package_feature_parent(package_id, child_id, pkg_index, nodes, parents);
+                        add_feature_child(child_id, from_id, nodes, parents);
+                    } else {
+                        add_feature_child(from_id, child_id, nodes, parents);
+                    }
+                }
+                FeatureValue::Dep { .. } => {}
+                FeatureValue::DepFeature {
+                    dep_name,
+                    dep_feature,
+                    weak,
+                } => {
+                    let Some(dependencies) = resolved.feature_dependencies.get(&package_id) else {
+                        continue;
+                    };
+                    for dependency in dependencies
+                        .iter()
+                        .filter(|dependency| dependency.name == dep_name.as_str())
+                    {
+                        if dependency.optional && !weak {
+                            let Some(&package_child) = pkg_index.get(&package_id) else {
+                                continue;
+                            };
+                            let dep_feature_id = ensure_feature_node(
+                                package_id,
+                                dep_name.to_string(),
+                                (!inverted).then_some(package_child),
+                                nodes,
+                                parents,
+                                feature_index,
+                                pending,
+                            );
+                            if inverted {
+                                add_package_feature_parent(
+                                    package_id,
+                                    dep_feature_id,
+                                    pkg_index,
+                                    nodes,
+                                    parents,
+                                );
+                                add_feature_child(dep_feature_id, from_id, nodes, parents);
+                            } else {
+                                add_feature_child(from_id, dep_feature_id, nodes, parents);
+                            }
+                        }
+
+                        let package_child = if inverted {
+                            pkg_index.get(&package_id)
+                        } else {
+                            pkg_index.get(&dependency.package_id)
+                        };
+                        let Some(&package_child) = package_child else {
+                            continue;
+                        };
+                        let dep_feature_id = ensure_feature_node(
+                            dependency.package_id,
+                            dep_feature.to_string(),
+                            (!inverted).then_some(package_child),
+                            nodes,
+                            parents,
+                            feature_index,
+                            pending,
+                        );
+                        if inverted {
+                            add_package_feature_parent(
+                                dependency.package_id,
+                                dep_feature_id,
+                                pkg_index,
+                                nodes,
+                                parents,
+                            );
+                            add_feature_child(dep_feature_id, from_id, nodes, parents);
+                        } else {
+                            add_feature_child(from_id, dep_feature_id, nodes, parents);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn add_package_feature_parent(
+    package_id: PackageId,
+    feature_id: NodeId,
+    pkg_index: &FxHashMap<PackageId, NodeId>,
+    nodes: &mut [DependencyNode],
+    parents: &mut [Vec<NodeId>],
+) {
+    let Some(&package_node) = pkg_index.get(&package_id) else {
+        return;
+    };
+    let children = match &mut nodes[package_node.0] {
+        DependencyNode::Crate(package) => &mut package.children,
+        _ => return,
+    };
+    if !children.contains(&feature_id) {
+        children.push(feature_id);
+        parents[feature_id.0].push(package_node);
+    }
+}
+
+fn add_feature_child(
+    from: NodeId,
+    child: NodeId,
+    nodes: &mut [DependencyNode],
+    parents: &mut [Vec<NodeId>],
+) {
+    let children = match &mut nodes[from.0] {
+        DependencyNode::Feature(feature) => &mut feature.children,
+        _ => unreachable!("feature edges originate at feature nodes"),
+    };
+    if !children.contains(&child) {
+        children.push(child);
+        parents[child.0].push(from);
+    }
 }
 
 #[derive(Default)]

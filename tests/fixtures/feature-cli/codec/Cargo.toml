@@ -1,0 +1,9 @@
+[package]
+name = "feature-cli-codec"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = ["std"]
+std = []
+derive = []

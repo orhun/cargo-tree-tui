@@ -1,11 +1,101 @@
 use std::path::PathBuf;
 
 use cargo::core::dependency::DepKind;
-use cargo_tree_tui::core::dependency::DependencyType;
+use cargo_tree_tui::core::dependency::{DependencyType, ResolutionOptions};
 use cargo_tree_tui::core::{Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId};
 
 fn project_manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")
+}
+
+fn feature_node(tree: &DependencyTree, name: &str, command_line: bool) -> NodeId {
+    tree.nodes
+        .iter()
+        .enumerate()
+        .find_map(|(idx, node)| match node {
+            DependencyNode::Feature(feature)
+                if feature.name == name && feature.command_line == command_line =>
+            {
+                Some(NodeId(idx))
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("missing feature `{name}` (command_line={command_line})"))
+}
+
+fn package_node(tree: &DependencyTree, name: &str) -> NodeId {
+    tree.crate_nodes()
+        .find(|&id| {
+            tree.node(id)
+                .is_some_and(|node| node.display_name() == name)
+        })
+        .unwrap_or_else(|| panic!("missing package `{name}`"))
+}
+
+#[test]
+fn inverted_feature_tree_includes_command_line_feature_links() {
+    let manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/feature-cli/app/Cargo.toml");
+    let options = ResolutionOptions {
+        edges: vec!["features".into()],
+        invert: Some(vec!["feature-cli-codec".into()]),
+        features: vec!["ui".into()],
+        no_default_features: true,
+        ..ResolutionOptions::default()
+    };
+
+    let tree = DependencyTree::load_with_options(Some(manifest), &options).unwrap();
+    let app_id = package_node(&tree, "feature-cli-app");
+    let codec_id = package_node(&tree, "feature-cli-codec");
+    let ui_id = feature_node(&tree, "ui", true);
+    let derive_id = feature_node(&tree, "derive", false);
+
+    assert!(tree.node(codec_id).unwrap().children().contains(&derive_id));
+    assert!(tree.node(derive_id).unwrap().children().contains(&ui_id));
+    assert!(!tree.node(derive_id).unwrap().children().contains(&app_id));
+    assert!(tree.parents[ui_id.0].contains(&app_id));
+    assert!(tree.parents[ui_id.0].contains(&derive_id));
+}
+
+#[test]
+fn inverted_feature_tree_marks_all_features_as_command_line() {
+    let manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/feature-cli/app/Cargo.toml");
+    let options = ResolutionOptions {
+        edges: vec!["features".into()],
+        invert: Some(vec!["feature-cli-codec".into()]),
+        all_features: true,
+        no_default_features: true,
+        ..ResolutionOptions::default()
+    };
+
+    let tree = DependencyTree::load_with_options(Some(manifest), &options).unwrap();
+    let codec_id = package_node(&tree, "feature-cli-codec");
+    let ui_id = feature_node(&tree, "ui", true);
+    let derive_id = feature_node(&tree, "derive", false);
+
+    assert!(tree.node(codec_id).unwrap().children().contains(&derive_id));
+    assert!(tree.node(derive_id).unwrap().children().contains(&ui_id));
+}
+
+#[test]
+fn inverted_feature_tree_marks_direct_dependency_feature_as_command_line() {
+    let manifest =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/feature-cli/app/Cargo.toml");
+    let options = ResolutionOptions {
+        edges: vec!["features".into()],
+        invert: Some(vec!["feature-cli-codec".into()]),
+        features: vec!["feature-cli-codec/derive".into()],
+        no_default_features: true,
+        ..ResolutionOptions::default()
+    };
+
+    let tree = DependencyTree::load_with_options(Some(manifest), &options).unwrap();
+    let codec_id = package_node(&tree, "feature-cli-codec");
+    let derive_id = feature_node(&tree, "derive", true);
+
+    assert!(tree.node(codec_id).unwrap().children().contains(&derive_id));
+    assert!(tree.node(derive_id).unwrap().children().is_empty());
 }
 
 #[test]

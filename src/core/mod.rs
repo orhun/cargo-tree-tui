@@ -1,6 +1,6 @@
 pub mod dependency;
 
 pub use dependency::{
-    Dependency, DependencyGroup, DependencyNode, DependencyTree, NodeId, PackageFormatMetadata,
-    PackageFormatRequirements, ResolutionOptions,
+    Dependency, DependencyFeature, DependencyGroup, DependencyNode, DependencyTree, NodeId,
+    PackageFormatMetadata, PackageFormatRequirements, ResolutionOptions,
 };
