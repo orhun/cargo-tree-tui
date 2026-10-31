@@ -30,6 +30,7 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
     state.advance_spinner();
 
     let tree_widget = TreeWidget::new(&state.dependency_tree)
+        .prefix(state.prefix)
         .search_query(
             matches!(
                 state.input_mode,

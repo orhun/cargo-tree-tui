@@ -1,6 +1,6 @@
 use std::{sync::Arc, sync::mpsc, thread, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use crossterm::event::{self, Event as CrosstermEvent};
 
 use cargo_tree_tui::{
@@ -9,7 +9,7 @@ use cargo_tree_tui::{
     ops::tree::tui::{
         draw_tui,
         state::{Event, SearchRequest, SearchResult, TuiState},
-        widget::TreeWidgetState,
+        widget::{TreePrefix, TreeWidgetState},
     },
 };
 
@@ -18,6 +18,12 @@ use crate::cli::TreeArgs;
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
     let no_dedupe = args.no_dedupe || args.all;
+    let prefix = resolve_prefix(args.prefix, args.no_indent, args.prefix_depth)?;
+    let tui_prefix = match prefix {
+        crate::cli::Prefix::Depth => TreePrefix::Depth,
+        crate::cli::Prefix::Indent => TreePrefix::Indent,
+        crate::cli::Prefix::None => TreePrefix::None,
+    };
     let resolution_options = ResolutionOptions {
         workspace: args.workspace,
         packages: args.package,
@@ -47,7 +53,12 @@ pub fn run(args: TreeArgs) -> Result<()> {
     let worker_tree = Arc::clone(&dependency_tree);
     let worker_handle = thread::spawn(move || search_worker(worker_tree, search_rx, event_tx));
 
-    let mut state = TuiState::new(dependency_tree, search_tx, resolution_options.depth);
+    let mut state = TuiState::new(
+        dependency_tree,
+        search_tx,
+        resolution_options.depth,
+        tui_prefix,
+    );
     let mut terminal = ratatui::init();
 
     while state.running {
@@ -68,6 +79,34 @@ pub fn run(args: TreeArgs) -> Result<()> {
     ratatui::restore();
     let _ = worker_handle.join();
     Ok(())
+}
+
+fn resolve_prefix(
+    prefix: Option<crate::cli::Prefix>,
+    no_indent: bool,
+    prefix_depth: bool,
+) -> Result<crate::cli::Prefix> {
+    if no_indent && prefix_depth {
+        bail!("`--no-indent` conflicts with `--prefix-depth`");
+    }
+
+    let legacy_prefix = if no_indent {
+        Some(crate::cli::Prefix::None)
+    } else if prefix_depth {
+        Some(crate::cli::Prefix::Depth)
+    } else {
+        None
+    };
+
+    if let (Some(prefix), Some(legacy_prefix)) = (prefix, legacy_prefix)
+        && prefix != legacy_prefix
+    {
+        bail!("`--prefix` conflicts with its deprecated alias");
+    }
+
+    Ok(prefix
+        .or(legacy_prefix)
+        .unwrap_or(crate::cli::Prefix::Indent))
 }
 
 fn search_worker(

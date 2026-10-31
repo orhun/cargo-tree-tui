@@ -10,7 +10,7 @@ use crate::ops::tree::tui::TuiTree;
 use super::{
     lineage::Lineage,
     state::{TreeWidgetState, VisIdx, VisibleNode},
-    style::TreeWidgetStyle,
+    style::{TreePrefix, TreeWidgetStyle},
     viewport::Viewport,
 };
 
@@ -37,6 +37,7 @@ pub struct RenderContext<'a, 's> {
     pub state: &'s mut TreeWidgetState,
     pub style: &'a TreeWidgetStyle,
     pub block: Option<&'a Block<'a>>,
+    pub prefix: TreePrefix,
 }
 
 impl<'a, 's> RenderContext<'a, 's> {
@@ -45,12 +46,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         state: &'s mut TreeWidgetState,
         style: &'a TreeWidgetStyle,
         block: Option<&'a Block<'a>>,
+        prefix: TreePrefix,
     ) -> Self {
         Self {
             tree,
             state,
             style,
             block,
+            prefix,
         }
     }
 
@@ -136,7 +139,14 @@ impl<'a, 's> RenderContext<'a, 's> {
         let vnode = visible_nodes.get(vis_idx.0)?;
         let node_id = vnode.id;
         let node_data = self.tree.node(node_id)?;
-        let lineage = Lineage::build(self.tree, visible_nodes, vis_idx, selected_vis)?;
+        let lineage = match self.prefix {
+            TreePrefix::Depth => {
+                Lineage::build::<true>(self.tree, visible_nodes, vis_idx, selected_vis)?
+            }
+            TreePrefix::Indent | TreePrefix::None => {
+                Lineage::build::<false>(self.tree, visible_nodes, vis_idx, selected_vis)?
+            }
+        };
         let has_children = !node_data.children().is_empty();
         let is_open = self.state.open.get(node_id.0).copied().unwrap_or(false);
         let is_group = node_data.is_group();
@@ -156,40 +166,60 @@ impl<'a, 's> RenderContext<'a, 's> {
             format!("{} ", self.style.node_symbol)
         };
 
-        if show_connector {
-            for segment in &lineage.segments {
-                if segment.is_group {
-                    continue;
+        match self.prefix {
+            TreePrefix::Indent if show_connector => {
+                for segment in &lineage.segments {
+                    if segment.is_group {
+                        continue;
+                    }
+                    let base_style = if context_lines {
+                        self.style.context_style
+                    } else {
+                        segment.edge_style.unwrap_or(self.style.style)
+                    };
+                    let symbol = if segment.has_more_siblings {
+                        self.style.continuation_symbol
+                    } else {
+                        self.style.empty_symbol
+                    };
+
+                    spans.push(Span::styled(symbol, base_style));
                 }
-                let base_style = if context_lines {
-                    self.style.context_style
-                } else {
-                    segment.edge_style.unwrap_or(self.style.style)
-                };
-                let symbol = if segment.has_more_siblings {
-                    self.style.continuation_symbol
-                } else {
-                    self.style.empty_symbol
-                };
 
-                spans.push(Span::styled(symbol, base_style));
+                if !is_group {
+                    let connector = if lineage.is_last {
+                        self.style.last_branch_symbol
+                    } else {
+                        self.style.branch_symbol
+                    };
+                    let parent_group_style = vnode
+                        .parent_vis_idx
+                        .and_then(|pvis| visible_nodes.get(pvis.0))
+                        .and_then(|pvnode| self.tree.node(pvnode.id))
+                        .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
+                    let connector_style = parent_group_style.unwrap_or(self.style.style);
+                    spans.push(Span::styled(connector, connector_style));
+                    spans.push(Span::styled(toggle, self.style.style));
+                }
             }
-
-            if !is_group {
-                let connector = if lineage.is_last {
-                    self.style.last_branch_symbol
-                } else {
-                    self.style.branch_symbol
-                };
-                let parent_group_style = vnode
-                    .parent_vis_idx
-                    .and_then(|pvis| visible_nodes.get(pvis.0))
-                    .and_then(|pvnode| self.tree.node(pvnode.id))
-                    .and_then(|parent| parent.as_group().map(|group| group.kind.style()));
-                let connector_style = parent_group_style.unwrap_or(self.style.style);
-                spans.push(Span::styled(connector, connector_style));
+            TreePrefix::Depth => {
+                spans.push(Span::styled(
+                    format!(
+                        "{} ",
+                        lineage
+                            .package_depth
+                            .expect("depth prefix computes package depth")
+                    ),
+                    self.style.context_style,
+                ));
+                if show_connector && !is_group {
+                    spans.push(Span::styled(toggle, self.style.style));
+                }
+            }
+            TreePrefix::None if show_connector && !is_group => {
                 spans.push(Span::styled(toggle, self.style.style));
             }
+            TreePrefix::Indent | TreePrefix::None => {}
         }
 
         let name_style = if lineage.is_selected {
