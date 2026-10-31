@@ -628,6 +628,7 @@ fn large_dag_no_oom() {
         version: "0.1.0".into(),
         manifest_dir: None,
         is_proc_macro: false,
+        format_metadata: None,
         children: root_children,
     }));
 
@@ -638,6 +639,7 @@ fn large_dag_no_oom() {
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,
+            format_metadata: None,
             children: b_children.clone(),
         }));
     }
@@ -649,6 +651,7 @@ fn large_dag_no_oom() {
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,
+            format_metadata: None,
             children: c_children.clone(),
         }));
     }
@@ -659,6 +662,7 @@ fn large_dag_no_oom() {
             version: "0.1.0".into(),
             manifest_dir: None,
             is_proc_macro: false,
+            format_metadata: None,
             children: Vec::new(),
         }));
     }

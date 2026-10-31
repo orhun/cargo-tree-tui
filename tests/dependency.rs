@@ -264,6 +264,7 @@ fn as_dependency_returns_some_for_crate() {
         version: "1.0.0".into(),
         manifest_dir: None,
         is_proc_macro: false,
+        format_metadata: None,
         children: vec![],
     });
     assert!(dep.as_dependency().is_some());
@@ -289,6 +290,7 @@ fn display_name_for_crate_and_group() {
         version: "1.0.0".into(),
         manifest_dir: None,
         is_proc_macro: false,
+        format_metadata: None,
         children: vec![NodeId(1)],
     });
     assert_eq!(crate_node.display_name(), "serde");
