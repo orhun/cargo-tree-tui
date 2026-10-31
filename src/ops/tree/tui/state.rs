@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::TuiTree;
 
-use super::widget::{SearchState, TreePrefix, TreeWidgetState};
+use super::widget::{SearchState, TreeCharset, TreePrefix, TreeWidgetState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
@@ -37,6 +37,7 @@ pub struct TuiState {
     pub running: bool,
     pub dependency_tree: Arc<TuiTree>,
     pub prefix: TreePrefix,
+    pub charset: TreeCharset,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
     pub input_mode: InputMode,
@@ -53,6 +54,7 @@ impl TuiState {
         search_tx: Sender<SearchRequest>,
         depth: Option<usize>,
         prefix: TreePrefix,
+        charset: TreeCharset,
     ) -> Self {
         let mut tree_widget_state = TreeWidgetState::default();
         if let Some(depth) = depth {
@@ -64,6 +66,7 @@ impl TuiState {
             running: true,
             dependency_tree,
             prefix,
+            charset,
             tree_widget_state,
             show_help: false,
             input_mode: InputMode::Normal,

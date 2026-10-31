@@ -13,6 +13,16 @@ pub enum TreePrefix {
     None,
 }
 
+/// Character set used for tree structure and row controls.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TreeCharset {
+    /// Use Unicode tree and control symbols.
+    #[default]
+    Utf8,
+    /// Use ASCII tree and control symbols.
+    Ascii,
+}
+
 /// Visual configuration for [`TreeWidget`](super::TreeWidget).
 #[derive(Debug)]
 pub struct TreeWidgetStyle {
@@ -52,6 +62,31 @@ impl Default for TreeWidgetStyle {
             last_branch_symbol: "└──",
             continuation_symbol: "│  ",
             empty_symbol: "   ",
+        }
+    }
+}
+
+impl TreeWidgetStyle {
+    pub fn set_charset(&mut self, charset: TreeCharset) {
+        match charset {
+            TreeCharset::Utf8 => {
+                self.node_symbol = '•';
+                self.node_closed_symbol = '▸';
+                self.node_open_symbol = '▾';
+                self.branch_symbol = "├──";
+                self.last_branch_symbol = "└──";
+                self.continuation_symbol = "│  ";
+                self.empty_symbol = "   ";
+            }
+            TreeCharset::Ascii => {
+                self.node_symbol = '*';
+                self.node_closed_symbol = '>';
+                self.node_open_symbol = 'v';
+                self.branch_symbol = "|-- ";
+                self.last_branch_symbol = "`-- ";
+                self.continuation_symbol = "|   ";
+                self.empty_symbol = "    ";
+            }
         }
     }
 }
