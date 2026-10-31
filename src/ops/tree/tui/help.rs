@@ -12,6 +12,7 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
     ("/", "Search"),
     ("e", "Select dependency edge kinds"),
     ("t", "Select target triples"),
+    ("f", "Select features"),
     ("←", "Collapse selected"),
     ("→", "Expand selected"),
     ("space", "Toggle expand/collapse"),
