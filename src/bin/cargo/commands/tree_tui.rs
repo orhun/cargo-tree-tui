@@ -17,6 +17,9 @@ use crate::cli::TreeArgs;
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
     let resolution_options = ResolutionOptions {
+        workspace: args.workspace,
+        packages: args.package,
+        exclude: args.exclude,
         targets: args.target,
         all_targets: args.all_targets,
         features: args.features,

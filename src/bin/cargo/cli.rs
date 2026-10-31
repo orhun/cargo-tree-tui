@@ -95,7 +95,7 @@ pub struct TreeArgs {
     pub format: String,
 
     /// Package to be used as the root of the tree
-    #[arg(long = "package", value_name = "SPEC")]
+    #[arg(short = 'p', long = "package", value_name = "SPEC")]
     pub package: Vec<String>,
 
     /// Display the tree for all packages in the workspace
