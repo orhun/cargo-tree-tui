@@ -290,7 +290,7 @@ impl DependencyTree {
 
 /// Cargo resolver options that affect which packages and dependency edges are
 /// present in the dependency tree.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ResolutionOptions {
     /// Resolve the tree for all workspace members.
     pub workspace: bool,

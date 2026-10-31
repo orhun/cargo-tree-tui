@@ -8,7 +8,7 @@ use cargo_tree_tui::{
     ops::tree::tui::TuiTree,
     ops::tree::tui::{
         draw_tui,
-        state::{Event, SearchRequest, SearchResult, TuiState},
+        state::{Event, SearchRequest, SearchResult, TreeOptions, TuiState},
         widget::{TreeCharset, TreeFormat, TreePrefix, TreeWidgetState},
     },
 };
@@ -43,30 +43,34 @@ pub fn run(args: TreeArgs) -> Result<()> {
             crate::cli::Charset::Ascii => TreeCharset::Ascii,
         },
     );
-    let resolution_options = ResolutionOptions {
-        workspace: args.workspace,
-        packages: args.package,
-        exclude: args.exclude,
-        edges: args.edges,
-        no_dev_dependencies: args.no_dev_dependencies,
-        prune: args.prune,
-        invert: args.invert,
-        duplicates: args.duplicates,
-        depth,
-        workspace_depth,
-        targets: args.target,
-        all_targets: args.all_targets,
-        features: args.features,
-        all_features: args.all_features,
-        no_default_features: args.no_default_features,
+    let tree_options = TreeOptions {
+        manifest_path: args.manifest_path,
+        resolution: ResolutionOptions {
+            workspace: args.workspace,
+            packages: args.package,
+            exclude: args.exclude,
+            edges: args.edges,
+            no_dev_dependencies: args.no_dev_dependencies,
+            prune: args.prune,
+            invert: args.invert,
+            duplicates: args.duplicates,
+            depth,
+            workspace_depth,
+            targets: args.target,
+            all_targets: args.all_targets,
+            features: args.features,
+            all_features: args.all_features,
+            no_default_features: args.no_default_features,
+        },
+        no_dedupe,
     };
     let dependency_tree = Arc::new(TuiTree::new(
         cargo_tree_tui::core::DependencyTree::load_with_options_and_format(
-            args.manifest_path,
-            &resolution_options,
+            tree_options.manifest_path.clone(),
+            &tree_options.resolution,
             format.requirements(),
         )?,
-        no_dedupe,
+        tree_options.no_dedupe,
     ));
 
     let (search_tx, search_rx) = mpsc::channel::<SearchRequest>();
@@ -81,6 +85,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
         tui_prefix,
         tui_charset,
         format,
+        tree_options,
     );
     let mut terminal = ratatui::init();
 

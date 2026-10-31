@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use std::sync::{Arc, mpsc::Sender};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::TuiTree;
+use crate::core::ResolutionOptions;
 
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
 
@@ -32,10 +34,19 @@ pub struct SearchResult {
     pub search_state: SearchState,
 }
 
+/// CLI options used to resolve and prepare the tree shown in the TUI.
+#[derive(Debug, Clone)]
+pub struct TreeOptions {
+    pub manifest_path: Option<PathBuf>,
+    pub resolution: ResolutionOptions,
+    pub no_dedupe: bool,
+}
+
 #[derive(Debug)]
 pub struct TuiState {
     pub running: bool,
     pub dependency_tree: Arc<TuiTree>,
+    pub tree_options: TreeOptions,
     pub prefix: TreePrefix,
     pub charset: TreeCharset,
     pub format: TreeFormat,
@@ -57,6 +68,7 @@ impl TuiState {
         prefix: TreePrefix,
         charset: TreeCharset,
         format: TreeFormat,
+        tree_options: TreeOptions,
     ) -> Self {
         let mut tree_widget_state = TreeWidgetState::default();
         if let Some(depth) = depth {
@@ -67,6 +79,7 @@ impl TuiState {
         TuiState {
             running: true,
             dependency_tree,
+            tree_options,
             prefix,
             charset,
             format,
