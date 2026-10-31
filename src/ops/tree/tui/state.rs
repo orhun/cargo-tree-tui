@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{Arc, mpsc::Sender};
+use std::sync::{Arc, OnceLock, mpsc::Sender};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
@@ -16,6 +16,12 @@ pub enum InputMode {
     Search,
     SearchResults,
     Selector,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectorKind {
+    EdgeKinds,
+    Targets,
 }
 
 #[derive(Debug)]
@@ -72,6 +78,7 @@ pub struct TuiState {
     pub dependency_tree: Arc<TuiTree>,
     pub tree_options: TreeOptions,
     pub selector: Option<SelectorState>,
+    selector_kind: Option<SelectorKind>,
     pub prefix: TreePrefix,
     pub charset: TreeCharset,
     pub format: TreeFormat,
@@ -108,6 +115,7 @@ impl TuiState {
             dependency_tree,
             tree_options,
             selector: None,
+            selector_kind: None,
             prefix,
             charset,
             format,
@@ -205,6 +213,9 @@ impl TuiState {
             (KeyCode::Char('e'), _) => {
                 self.open_edge_selector();
             }
+            (KeyCode::Char('t'), _) => {
+                self.open_target_selector();
+            }
             (KeyCode::Char('p'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
             }
@@ -273,6 +284,48 @@ impl TuiState {
                 ),
             ],
         ));
+        self.selector_kind = Some(SelectorKind::EdgeKinds);
+        self.input_mode = InputMode::Selector;
+    }
+
+    fn open_target_selector(&mut self) {
+        let current_targets = target_selection(&self.tree_options.resolution);
+        let mut candidates = target_choices().to_vec();
+        for target in &self.tree_options.resolution.targets {
+            if target != "all" && !candidates.contains(target) {
+                candidates.push(target.clone());
+            }
+        }
+        let mut options = Vec::with_capacity(candidates.len() + 1);
+        options.push(
+            SelectorOption::new(
+                DEFAULT_TARGET,
+                "Default target",
+                current_targets
+                    .iter()
+                    .any(|target| target == DEFAULT_TARGET),
+            )
+            .exclusive(),
+        );
+        options.extend(candidates.iter().map(|value| {
+            let option = SelectorOption::new(
+                value.clone(),
+                value.clone(),
+                current_targets.iter().any(|target| target == value),
+            );
+            if value == "all" {
+                option.exclusive()
+            } else {
+                option
+            }
+        }));
+
+        self.selector = Some(
+            SelectorState::new("Target triples", options)
+                .filterable()
+                .max_height(20),
+        );
+        self.selector_kind = Some(SelectorKind::Targets);
         self.input_mode = InputMode::Selector;
     }
 
@@ -291,13 +344,24 @@ impl TuiState {
         match key {
             KeyCode::Esc => {
                 self.selector = None;
+                self.selector_kind = None;
                 self.input_mode = InputMode::Normal;
             }
             KeyCode::Up => selector.move_up(),
             KeyCode::Down => selector.move_down(),
             KeyCode::Char(' ') => selector.toggle_selected(),
-            KeyCode::Enter => self.apply_edge_selection(),
+            KeyCode::Backspace => selector.pop_filter_char(),
+            KeyCode::Char(ch) => selector.push_filter_char(ch),
+            KeyCode::Enter => self.apply_selector_selection(),
             _ => {}
+        }
+    }
+
+    fn apply_selector_selection(&mut self) {
+        match self.selector_kind {
+            Some(SelectorKind::EdgeKinds) => self.apply_edge_selection(),
+            Some(SelectorKind::Targets) => self.apply_target_selection(),
+            None => {}
         }
     }
 
@@ -313,6 +377,7 @@ impl TuiState {
             && features == feature_edges(&self.tree_options.resolution)
         {
             self.selector = None;
+            self.selector_kind = None;
             self.input_mode = InputMode::Normal;
             return;
         }
@@ -327,6 +392,52 @@ impl TuiState {
 
         let mut options = self.tree_options.clone();
         set_edge_options(&mut options.resolution, selected, features);
+        self.resolution_generation = self.resolution_generation.wrapping_add(1);
+        let request = TreeResolutionRequest {
+            generation: self.resolution_generation,
+            format_requirements: self.format.requirements(),
+            options,
+        };
+
+        if self.resolution_tx.send(request).is_ok() {
+            if let Some(selector) = self.selector.as_mut() {
+                selector.applying = true;
+                selector.message = None;
+            }
+        } else if let Some(selector) = self.selector.as_mut() {
+            selector.message = Some("Could not start dependency resolution".to_owned());
+        }
+    }
+
+    fn apply_target_selection(&mut self) {
+        let Some(selector) = self.selector.as_ref() else {
+            return;
+        };
+        let selected = selector.checked_values();
+        let selected_targets = if selected.iter().any(|target| target == "all") {
+            vec!["all".to_owned()]
+        } else if selected.is_empty() || selected.iter().all(|target| target == DEFAULT_TARGET) {
+            vec![DEFAULT_TARGET.to_owned()]
+        } else {
+            selected
+                .into_iter()
+                .filter(|target| target != DEFAULT_TARGET)
+                .collect()
+        };
+        if selected_targets == target_selection(&self.tree_options.resolution) {
+            self.selector = None;
+            self.selector_kind = None;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        let mut options = self.tree_options.clone();
+        options.resolution.targets = if selected_targets == [DEFAULT_TARGET] {
+            Vec::new()
+        } else {
+            selected_targets
+        };
+        options.resolution.all_targets = false;
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
@@ -364,6 +475,7 @@ impl TuiState {
                     self.tree_widget_state.expand_all(&self.dependency_tree);
                 }
                 self.selector = None;
+                self.selector_kind = None;
                 self.input_mode = InputMode::Normal;
             }
             Err(error) => {
@@ -407,6 +519,30 @@ const EDGE_KINDS: [DependencyType; 3] = [
     DependencyType::Build,
     DependencyType::Dev,
 ];
+
+const DEFAULT_TARGET: &str = "__cargo_tree_tui_default_target";
+
+fn target_choices() -> &'static [String] {
+    static TARGET_CHOICES: OnceLock<Vec<String>> = OnceLock::new();
+    TARGET_CHOICES
+        .get_or_init(|| {
+            cargo::util::command_prelude::get_target_triples_with_all()
+                .into_iter()
+                .map(|candidate| candidate.get_value().to_string_lossy().into_owned())
+                .collect()
+        })
+        .as_slice()
+}
+
+fn target_selection(options: &ResolutionOptions) -> Vec<String> {
+    if options.all_targets || options.targets.iter().any(|target| target == "all") {
+        vec!["all".to_owned()]
+    } else if options.targets.is_empty() {
+        vec![DEFAULT_TARGET.to_owned()]
+    } else {
+        options.targets.clone()
+    }
+}
 
 fn edge_flag(kind: DependencyType) -> &'static str {
     match kind {
