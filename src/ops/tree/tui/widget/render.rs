@@ -8,6 +8,7 @@ use crate::core::{Dependency, DependencyNode};
 use crate::ops::tree::tui::TuiTree;
 
 use super::{
+    format::TreeFormat,
     lineage::Lineage,
     state::{TreeWidgetState, VisIdx, VisibleNode},
     style::{TreePrefix, TreeWidgetStyle},
@@ -38,6 +39,7 @@ pub struct RenderContext<'a, 's> {
     pub style: &'a TreeWidgetStyle,
     pub block: Option<&'a Block<'a>>,
     pub prefix: TreePrefix,
+    pub format: Option<&'a TreeFormat>,
 }
 
 impl<'a, 's> RenderContext<'a, 's> {
@@ -47,6 +49,7 @@ impl<'a, 's> RenderContext<'a, 's> {
         style: &'a TreeWidgetStyle,
         block: Option<&'a Block<'a>>,
         prefix: TreePrefix,
+        format: Option<&'a TreeFormat>,
     ) -> Self {
         Self {
             tree,
@@ -54,6 +57,7 @@ impl<'a, 's> RenderContext<'a, 's> {
             style,
             block,
             prefix,
+            format,
         }
     }
 
@@ -232,19 +236,32 @@ impl<'a, 's> RenderContext<'a, 's> {
 
         match node_data {
             DependencyNode::Crate(dependency) => {
-                spans.push(Span::styled(dependency.name.clone(), name_style));
-                if self.tree.is_duplicate(node_id) {
-                    spans.push(Span::styled(" (*)", self.style.suffix_style));
-                }
-                if !dependency.version.is_empty() {
-                    spans.push(Span::styled(
-                        format!(" v{}", dependency.version),
+                if let Some(format) = self.format {
+                    format.append_spans(
+                        dependency,
+                        &mut spans,
+                        name_style,
                         self.style.version_style,
-                    ));
-                }
+                        self.style.suffix_style,
+                    );
+                    if self.tree.is_duplicate(node_id) {
+                        spans.push(Span::styled(" (*)", self.style.suffix_style));
+                    }
+                } else {
+                    spans.push(Span::styled(dependency.name.clone(), name_style));
+                    if self.tree.is_duplicate(node_id) {
+                        spans.push(Span::styled(" (*)", self.style.suffix_style));
+                    }
+                    if !dependency.version.is_empty() {
+                        spans.push(Span::styled(
+                            format!(" v{}", dependency.version),
+                            self.style.version_style,
+                        ));
+                    }
 
-                if let Some(extra) = format_suffixes(dependency, self.style) {
-                    spans.extend(extra);
+                    if let Some(extra) = format_suffixes(dependency, self.style) {
+                        spans.extend(extra);
+                    }
                 }
             }
             DependencyNode::Group(group) => {

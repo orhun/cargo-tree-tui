@@ -9,7 +9,7 @@ use cargo_tree_tui::{
     ops::tree::tui::{
         draw_tui,
         state::{Event, SearchRequest, SearchResult, TuiState},
-        widget::{TreeCharset, TreePrefix, TreeWidgetState},
+        widget::{TreeCharset, TreeFormat, TreePrefix, TreeWidgetState},
     },
 };
 
@@ -19,6 +19,7 @@ use crate::cli::TreeArgs;
 pub fn run(args: TreeArgs) -> Result<()> {
     let no_dedupe = args.no_dedupe || args.all;
     let prefix = resolve_prefix(args.prefix, args.no_indent, args.prefix_depth)?;
+    let format = TreeFormat::parse(&args.format)?;
     let tui_prefix = match prefix {
         crate::cli::Prefix::Depth => TreePrefix::Depth,
         crate::cli::Prefix::Indent => TreePrefix::Indent,
@@ -54,9 +55,10 @@ pub fn run(args: TreeArgs) -> Result<()> {
         no_default_features: args.no_default_features,
     };
     let dependency_tree = Arc::new(TuiTree::new(
-        cargo_tree_tui::core::DependencyTree::load_with_options(
+        cargo_tree_tui::core::DependencyTree::load_with_options_and_format(
             args.manifest_path,
             &resolution_options,
+            format.requirements(),
         )?,
         no_dedupe,
     ));
@@ -72,6 +74,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
         resolution_options.depth,
         tui_prefix,
         tui_charset,
+        format,
     );
     let mut terminal = ratatui::init();
 

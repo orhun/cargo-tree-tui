@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use cargo::{
@@ -72,6 +72,8 @@ pub struct Dependency {
     pub manifest_dir: Option<String>,
     /// Whether this crate exposes a proc-macro target.
     pub is_proc_macro: bool,
+    /// Metadata requested by the package display format.
+    pub format_metadata: Option<Arc<PackageFormatMetadata>>,
     /// Children represented as node indices for downward traversal.
     pub children: Vec<NodeId>,
 }
@@ -83,9 +85,30 @@ impl From<&PackageSnapshot> for Dependency {
             version: snapshot.version.clone(),
             manifest_dir: snapshot.manifest_dir.clone(),
             is_proc_macro: snapshot.is_proc_macro,
+            format_metadata: snapshot.format_metadata.clone(),
             children: Vec::new(), // filled in by wire_edges
         }
     }
+}
+
+/// Package metadata fields needed by a Cargo-style tree format.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PackageFormatRequirements {
+    pub license: bool,
+    pub repository: bool,
+    pub features: bool,
+    pub library: bool,
+    pub source: bool,
+}
+
+/// Optional Cargo package values used by a formatted tree label.
+#[derive(Debug, Clone, Default)]
+pub struct PackageFormatMetadata {
+    pub license: Option<String>,
+    pub repository: Option<String>,
+    pub features: Option<String>,
+    pub library: Option<String>,
+    pub source: Option<String>,
 }
 
 /// Dependency group node (e.g. `[dev-dependencies]`) within the deduplicated tree.
@@ -192,7 +215,21 @@ impl DependencyTree {
         manifest_path: Option<PathBuf>,
         options: &ResolutionOptions,
     ) -> Result<Self> {
-        let resolved = ResolvedWorkspace::load(manifest_path, options)?;
+        Self::load_with_options_and_format(
+            manifest_path,
+            options,
+            PackageFormatRequirements::default(),
+        )
+    }
+
+    /// Resolves the workspace and collects only the metadata requested by the
+    /// package display format.
+    pub fn load_with_options_and_format(
+        manifest_path: Option<PathBuf>,
+        options: &ResolutionOptions,
+        format_requirements: PackageFormatRequirements,
+    ) -> Result<Self> {
+        let resolved = ResolvedWorkspace::load(manifest_path, options, format_requirements)?;
         let workspace_name = resolved.workspace_name.clone();
         let mut collected = collect_packages(&resolved);
         let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
@@ -343,21 +380,59 @@ pub struct PackageSnapshot {
     version: String,
     manifest_dir: Option<String>,
     is_proc_macro: bool,
+    format_metadata: Option<Arc<PackageFormatMetadata>>,
 }
 
 impl PackageSnapshot {
-    fn from_package(package: &Package) -> Self {
+    fn from_package(
+        package: &Package,
+        features: Option<String>,
+        format_requirements: PackageFormatRequirements,
+    ) -> Self {
+        let package_id = package.package_id();
+        let source_id = package_id.source_id();
         let manifest_dir = package
             .package_id()
             .source_id()
             .is_path()
             .then(|| package.root().display().to_string());
+        let metadata = package.manifest().metadata();
+        let format_metadata = PackageFormatMetadata {
+            license: format_requirements
+                .license
+                .then(|| metadata.license.clone())
+                .flatten(),
+            repository: format_requirements
+                .repository
+                .then(|| metadata.repository.clone())
+                .flatten(),
+            features,
+            library: format_requirements
+                .library
+                .then(|| {
+                    package
+                        .targets()
+                        .iter()
+                        .find(|target| target.is_lib())
+                        .map(|target| target.crate_name().to_string())
+                })
+                .flatten(),
+            source: (format_requirements.source && !source_id.is_crates_io())
+                .then(|| source_id.to_string()),
+        };
+        let format_metadata = (format_metadata.license.is_some()
+            || format_metadata.repository.is_some()
+            || format_metadata.features.is_some()
+            || format_metadata.library.is_some()
+            || format_metadata.source.is_some())
+        .then(|| Arc::new(format_metadata));
 
         Self {
             name: package.name().as_str().to_owned(),
             version: package.version().to_string(),
             manifest_dir,
             is_proc_macro: package.proc_macro(),
+            format_metadata,
         }
     }
 }
@@ -379,7 +454,11 @@ impl ResolvedWorkspace {
     /// reachable package into a compact [`PackageSnapshot`], classifies outgoing
     /// edges by dependency kind, and records the workspace member ids that act
     /// as graph roots.
-    fn load(manifest_path: Option<PathBuf>, options: &ResolutionOptions) -> Result<Self> {
+    fn load(
+        manifest_path: Option<PathBuf>,
+        options: &ResolutionOptions,
+        format_requirements: PackageFormatRequirements,
+    ) -> Result<Self> {
         let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
         let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
         let ws = Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
@@ -453,12 +532,37 @@ impl ResolvedWorkspace {
         // then everything else from the resolved package set.
         let mut packages: FxHashMap<PackageId, PackageSnapshot> = FxHashMap::default();
         for pkg in ws.members() {
-            packages.insert(pkg.package_id(), PackageSnapshot::from_package(pkg));
+            let features = format_requirements
+                .features
+                .then(|| {
+                    resolve
+                        .features(pkg.package_id())
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .filter(|features| !features.is_empty());
+            packages.insert(
+                pkg.package_id(),
+                PackageSnapshot::from_package(pkg, features, format_requirements),
+            );
         }
         for pkg in pkg_set.packages() {
-            packages
-                .entry(pkg.package_id())
-                .or_insert_with(|| PackageSnapshot::from_package(pkg));
+            packages.entry(pkg.package_id()).or_insert_with(|| {
+                let features = format_requirements
+                    .features
+                    .then(|| {
+                        resolve
+                            .features(pkg.package_id())
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    })
+                    .filter(|features| !features.is_empty());
+                PackageSnapshot::from_package(pkg, features, format_requirements)
+            });
         }
 
         // Build classified, kind-deduplicated edges keyed by source package.
