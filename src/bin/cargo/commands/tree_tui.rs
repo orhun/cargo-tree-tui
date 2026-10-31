@@ -20,6 +20,10 @@ pub fn run(args: TreeArgs) -> Result<()> {
         workspace: args.workspace,
         packages: args.package,
         exclude: args.exclude,
+        edges: args.edges,
+        no_dev_dependencies: args.no_dev_dependencies,
+        prune: args.prune,
+        depth: args.depth,
         targets: args.target,
         all_targets: args.all_targets,
         features: args.features,
@@ -34,7 +38,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
     let worker_tree = dependency_tree.clone();
     let worker_handle = thread::spawn(move || search_worker(worker_tree, search_rx, event_tx));
 
-    let mut state = TuiState::new(dependency_tree, search_tx);
+    let mut state = TuiState::new(dependency_tree, search_tx, resolution_options.depth);
     let mut terminal = ratatui::init();
 
     while state.running {
