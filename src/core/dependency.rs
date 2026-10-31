@@ -1311,10 +1311,10 @@ fn add_cli_feature_edges(
         }
 
         let mut requested_features = Vec::new();
-        if cli_features.all_features {
-            if let Some(features) = resolved.feature_map.get(&package_id) {
-                requested_features.extend(features.keys().cloned());
-            }
+        if cli_features.all_features
+            && let Some(features) = resolved.feature_map.get(&package_id)
+        {
+            requested_features.extend(features.keys().cloned());
         }
         if cli_features.uses_default_features {
             requested_features.push("default".to_owned());

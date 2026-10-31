@@ -195,7 +195,7 @@ fn verify_app() {
 
 #[test]
 fn features_accept_space_and_comma_separated_values() {
-    let args = match Command::try_parse_from([
+    let Command::TreeTui(args) = Command::try_parse_from([
         "cargo",
         "tree-tui",
         "--features",
@@ -204,10 +204,7 @@ fn features_accept_space_and_comma_separated_values() {
         "-F",
         "fourth",
     ])
-    .unwrap()
-    {
-        Command::TreeTui(args) => args,
-    };
+    .unwrap();
 
     assert_eq!(args.features, ["first", "second", "third", "fourth"]);
 }
