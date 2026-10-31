@@ -13,12 +13,13 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
     ("e", "Select dependency edge kinds"),
     ("t", "Select target triples"),
     ("f", "Select features"),
+    ("p", "Select packages"),
     ("←", "Collapse selected"),
     ("→", "Expand selected"),
     ("space", "Toggle expand/collapse"),
     ("[", "Go to previous sibling"),
     ("]", "Go to next sibling"),
-    ("p", "Go to parent"),
+    ("P", "Go to parent"),
     ("q", "Quit"),
 ];
 

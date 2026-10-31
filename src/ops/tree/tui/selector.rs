@@ -6,7 +6,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, Borders, Clear, List, ListItem, ListState, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, StatefulWidget, Widget,
+        ScrollbarOrientation, ScrollbarState, StatefulWidget, Tabs, Widget,
     },
 };
 
@@ -16,6 +16,7 @@ pub struct SelectorOption {
     pub label: String,
     pub checked: bool,
     pub exclusive: bool,
+    tab: Option<usize>,
 }
 
 impl SelectorOption {
@@ -25,11 +26,17 @@ impl SelectorOption {
             label: label.into(),
             checked,
             exclusive: false,
+            tab: None,
         }
     }
 
     pub fn exclusive(mut self) -> Self {
         self.exclusive = true;
+        self
+    }
+
+    pub fn in_tab(mut self, tab: usize) -> Self {
+        self.tab = Some(tab);
         self
     }
 }
@@ -43,6 +50,8 @@ pub struct SelectorState {
     pub applying: bool,
     pub message: Option<String>,
     pub filter: Option<String>,
+    tabs: Option<Vec<String>>,
+    selected_tab: usize,
     max_height: usize,
     visible_options: Vec<usize>,
 }
@@ -57,6 +66,8 @@ impl SelectorState {
             applying: false,
             message: None,
             filter: None,
+            tabs: None,
+            selected_tab: 0,
             max_height: 14,
             visible_options,
         }
@@ -70,6 +81,34 @@ impl SelectorState {
     pub fn max_height(mut self, max_height: usize) -> Self {
         self.max_height = max_height;
         self
+    }
+
+    pub fn tabs(mut self, tabs: Vec<String>) -> Self {
+        self.tabs = Some(tabs);
+        self.refresh_visible_options();
+        self
+    }
+
+    pub fn has_tabs(&self) -> bool {
+        self.tabs.is_some()
+    }
+
+    pub fn selected_tab(&self) -> usize {
+        self.selected_tab
+    }
+
+    pub fn tab_titles(&self) -> Option<&[String]> {
+        self.tabs.as_deref()
+    }
+
+    pub fn next_tab(&mut self) {
+        if let Some(tabs) = &self.tabs
+            && !tabs.is_empty()
+        {
+            self.selected_tab = (self.selected_tab + 1) % tabs.len();
+            self.selected = 0;
+            self.refresh_visible_options();
+        }
     }
 
     pub fn checked_values(&self) -> Vec<String> {
@@ -119,11 +158,9 @@ impl SelectorState {
             .iter()
             .enumerate()
             .filter_map(|(index, option)| {
-                option
-                    .label
-                    .to_lowercase()
-                    .contains(&filter)
-                    .then_some(index)
+                (option.tab.map_or(true, |tab| tab == self.selected_tab)
+                    && option.label.to_lowercase().contains(&filter))
+                .then_some(index)
             })
             .collect();
         self.selected = self
@@ -182,26 +219,40 @@ impl<'a> SelectorPopup<'a> {
         let filter_width = self.state.filter.as_ref().map_or(0, |filter| {
             "Filter: ".chars().count() + filter.chars().count() + 2
         });
+        let tabs_width = self.state.tab_titles().map_or(0, |tabs| {
+            tabs.iter().map(|tab| tab.chars().count()).sum::<usize>() + tabs.len().saturating_sub(1)
+        });
         let footer_width = if self.state.applying {
             "Resolving dependency graph...".len()
         } else if self.state.filter.is_some() {
-            "Type filter   Backspace erase   Space toggle   Enter apply   Esc cancel".len()
+            if self.state.has_tabs() {
+                "Tab switch   Type filter   Backspace erase   Space toggle   Enter apply   Esc cancel"
+                    .len()
+            } else {
+                "Type filter   Backspace erase   Space toggle   Enter apply   Esc cancel".len()
+            }
         } else {
-            "Space toggle   Enter apply   Esc cancel".len()
+            if self.state.has_tabs() {
+                "Tab switch   Space toggle   Enter apply   Esc cancel".len()
+            } else {
+                "Space toggle   Enter apply   Esc cancel".len()
+            }
         }
         .saturating_add(2);
         let width = options_width
             .max(filter_width)
+            .max(tabs_width)
             .max(message_width)
             .max(footer_width)
             .saturating_add(2)
             .min(usize::from(area.width));
         let height = self
             .state
-            .options
+            .visible_options()
             .len()
             .saturating_add(5)
             .saturating_add(usize::from(self.state.filter.is_some()))
+            .saturating_add(usize::from(self.state.has_tabs()))
             .saturating_add(usize::from(self.state.message.is_some()))
             .min(self.state.max_height)
             .min(usize::from(area.height));
@@ -227,7 +278,12 @@ impl<'a> SelectorPopup<'a> {
             .saturating_add(Line::from("Filter: ").width() as u16)
             .saturating_add(Line::from(filter.as_str()).width() as u16)
             .min(popup_area.right().saturating_sub(2));
-        Some(Position::new(x, popup_area.y.saturating_add(1)))
+        Some(Position::new(
+            x,
+            popup_area
+                .y
+                .saturating_add(1 + u16::from(self.state.has_tabs())),
+        ))
     }
 }
 
@@ -279,7 +335,10 @@ impl Widget for SelectorPopup<'_> {
             (!self.state.visible_options().is_empty()).then_some(self.state.selected),
         );
         let footer_height = 1 + u16::from(self.state.message.is_some());
-        let mut constraints = Vec::with_capacity(5);
+        let mut constraints = Vec::with_capacity(6);
+        if self.state.has_tabs() {
+            constraints.push(Constraint::Length(1));
+        }
         if self.state.filter.is_some() {
             constraints.push(Constraint::Length(1));
         }
@@ -290,7 +349,24 @@ impl Widget for SelectorPopup<'_> {
             Constraint::Length(footer_height),
         ]);
         let areas = Layout::vertical(constraints).split(inner);
-        let offset = usize::from(self.state.filter.is_some());
+        let mut row = 0;
+        if let Some(tabs) = self.state.tab_titles() {
+            let selected_tab = self.state.selected_tab();
+            let tab_titles = tabs.iter().enumerate().map(|(index, title)| {
+                let style = if index == selected_tab {
+                    Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    Style::from(NOP).add_modifier(Modifier::DIM)
+                };
+                Line::from(Span::styled(title.clone(), style))
+            });
+            let tabs_widget = Tabs::new(tab_titles)
+                .select(self.state.selected_tab())
+                .highlight_style(Style::default())
+                .divider(Span::styled("│", Style::from(NOP)));
+            tabs_widget.render(areas[row], buf);
+            row += 1;
+        }
         if let Some(filter) = &self.state.filter {
             let filter_line = Line::from(vec![
                 Span::raw(" "),
@@ -299,10 +375,11 @@ impl Widget for SelectorPopup<'_> {
             ]);
             Paragraph::new(filter_line)
                 .style(Style::from(NOP))
-                .render(areas[0], buf);
+                .render(areas[row], buf);
+            row += 1;
         }
-        let list_area = areas[offset + 1];
-        let footer_area = areas[offset + 3];
+        let list_area = areas[row + 1];
+        let footer_area = areas[row + 3];
         StatefulWidget::render(list, list_area, buf, &mut list_state);
         if list_area.height > 0
             && self.state.visible_options().len() > usize::from(list_area.height)
@@ -333,6 +410,36 @@ impl Widget for SelectorPopup<'_> {
         }
         let footer = if self.state.applying {
             Line::from("Resolving dependency graph...")
+        } else if self.state.has_tabs() && self.state.filter.is_some() {
+            let key_style = Style::from(VALID);
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Tab", key_style),
+                Span::raw(" switch   "),
+                Span::styled("Type", key_style),
+                Span::raw(" filter   "),
+                Span::styled("Backspace", key_style),
+                Span::raw(" erase   "),
+                Span::styled("Space", key_style),
+                Span::raw(" toggle   "),
+                Span::styled("Enter", key_style),
+                Span::raw(" apply   "),
+                Span::styled("Esc", key_style),
+                Span::raw(" cancel "),
+            ])
+        } else if self.state.has_tabs() {
+            let key_style = Style::from(VALID);
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Tab", key_style),
+                Span::raw(" switch   "),
+                Span::styled("Space", key_style),
+                Span::raw(" toggle   "),
+                Span::styled("Enter", key_style),
+                Span::raw(" apply   "),
+                Span::styled("Esc", key_style),
+                Span::raw(" cancel "),
+            ])
         } else if self.state.filter.is_some() {
             let key_style = Style::from(VALID);
             Line::from(vec![
