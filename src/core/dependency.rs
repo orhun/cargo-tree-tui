@@ -247,11 +247,19 @@ impl DependencyTree {
         let resolved = ResolvedWorkspace::load(manifest_path, options, format_requirements)?;
         let workspace_name = resolved.workspace_name.clone();
         let mut collected = collect_packages(&resolved);
-        let parents = if resolved.show_features {
+        let mut parents = if resolved.show_features {
             wire_feature_edges(&resolved, &collected.pkg_index, &mut collected.nodes)
         } else {
             wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes)
         };
+        if options.workspace_depth {
+            parents = filter_to_workspace_packages(
+                &mut collected.nodes,
+                &collected.pkg_index,
+                &collected.roots,
+                &resolved.workspace_members,
+            );
+        }
         let tree = DependencyTree {
             workspace_name,
             parents,
@@ -302,6 +310,8 @@ pub struct ResolutionOptions {
     pub duplicates: bool,
     /// Maximum dependency depth to expand initially in the TUI.
     pub depth: Option<usize>,
+    /// Show only dependency packages that are members of the current workspace.
+    pub workspace_depth: bool,
     /// Explicit target triples. The special value `all` is handled like
     /// `--all-targets`.
     pub targets: Vec<String>,
@@ -484,6 +494,7 @@ impl PackageSnapshot {
 struct ResolvedWorkspace {
     workspace_name: String,
     packages: FxHashMap<PackageId, PackageSnapshot>,
+    workspace_members: FxHashSet<PackageId>,
     /// Deduplicated, classified outgoing edges keyed by source package.
     edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
     /// Dependency declarations in manifest direction, used to expand feature definitions.
@@ -532,6 +543,7 @@ impl ResolvedWorkspace {
         let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
         let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
         let ws = Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
+        let workspace_members = ws.members().map(|package| package.package_id()).collect();
 
         let all_targets =
             options.all_targets || (options.targets.len() == 1 && options.targets[0] == "all");
@@ -789,6 +801,7 @@ impl ResolvedWorkspace {
         Ok(ResolvedWorkspace {
             workspace_name,
             packages,
+            workspace_members,
             edges,
             feature_dependencies,
             graph_feature_dependencies,
@@ -979,6 +992,60 @@ fn collect_packages(resolved: &ResolvedWorkspace) -> CollectedPackages {
         pkg_index,
         roots,
     }
+}
+
+/// Filters non-workspace package occurrences while preserving feature nodes and roots.
+fn filter_to_workspace_packages(
+    nodes: &mut [DependencyNode],
+    package_index: &FxHashMap<PackageId, NodeId>,
+    roots: &[NodeId],
+    workspace_members: &FxHashSet<PackageId>,
+) -> Vec<Vec<NodeId>> {
+    let root_ids: FxHashSet<_> = roots.iter().copied().collect();
+    let mut is_workspace_member = vec![false; nodes.len()];
+    for (&package_id, &node_id) in package_index {
+        is_workspace_member[node_id.0] = workspace_members.contains(&package_id);
+    }
+
+    let keep: Vec<_> = nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, node)| {
+            root_ids.contains(&NodeId(idx))
+                || !matches!(node, DependencyNode::Crate(_))
+                || is_workspace_member[idx]
+        })
+        .collect();
+
+    for node in nodes.iter_mut() {
+        let children = match node {
+            DependencyNode::Crate(dependency) => &mut dependency.children,
+            DependencyNode::Group(group) => &mut group.children,
+            DependencyNode::Feature(feature) => &mut feature.children,
+        };
+        children.retain(|child| keep[child.0]);
+    }
+
+    let keep_group: Vec<_> = nodes
+        .iter()
+        .map(|node| !matches!(node, DependencyNode::Group(group) if group.children.is_empty()))
+        .collect();
+    for node in nodes.iter_mut() {
+        let children = match node {
+            DependencyNode::Crate(dependency) => &mut dependency.children,
+            DependencyNode::Group(group) => &mut group.children,
+            DependencyNode::Feature(feature) => &mut feature.children,
+        };
+        children.retain(|child| keep_group[child.0]);
+    }
+
+    let mut parents = vec![Vec::new(); nodes.len()];
+    for (parent_idx, node) in nodes.iter().enumerate() {
+        for &child in node.children() {
+            parents[child.0].push(NodeId(parent_idx));
+        }
+    }
+    parents
 }
 
 /// Wire the dependency edges between the already-collected arena nodes.

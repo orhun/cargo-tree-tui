@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, str::FromStr};
 
 use anyhow::Result;
 use clap::{ArgAction, Parser, ValueEnum};
@@ -33,6 +33,28 @@ pub enum Prefix {
 pub enum Charset {
     Utf8,
     Ascii,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Depth {
+    Number(usize),
+    Workspace,
+}
+
+impl FromStr for Depth {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if value == "workspace" {
+            return Ok(Self::Workspace);
+        }
+
+        value.parse().map(Self::Number).map_err(|_| {
+            format!(
+                "supported values for --depth are non-negative integers and `workspace`, but `{value}` is unknown"
+            )
+        })
+    }
 }
 
 #[derive(Debug, Parser)]
@@ -81,9 +103,9 @@ pub struct TreeArgs {
     #[arg(long = "prune", value_name = "SPEC")]
     pub prune: Vec<String>,
 
-    /// Maximum display depth of the dependency tree
+    /// Maximum display depth, or `workspace` to show only workspace dependencies
     #[arg(long = "depth", value_name = "DEPTH")]
-    pub depth: Option<usize>,
+    pub depth: Option<Depth>,
 
     /// Deprecated, use --prefix=none instead
     #[arg(long = "no-indent", hide = true)]
