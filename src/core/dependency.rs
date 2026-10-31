@@ -123,6 +123,7 @@ pub struct DependencyGroup {
 /// Feature node linking a package to an enabled feature or dependency feature.
 #[derive(Debug, Clone)]
 pub struct DependencyFeature {
+    pub package_name: String,
     pub name: String,
     pub command_line: bool,
     pub children: Vec<NodeId>,
@@ -178,6 +179,14 @@ impl DependencyNode {
         match self {
             Self::Group(node) => Some(node),
             _ => None,
+        }
+    }
+
+    pub fn display_label(&self) -> String {
+        match self {
+            Self::Crate(node) => node.name.clone(),
+            Self::Group(node) => node.label().to_owned(),
+            Self::Feature(node) => format!("{} feature \"{}\"", node.package_name, node.name),
         }
     }
 }
@@ -612,6 +621,17 @@ impl ResolvedWorkspace {
         )
         .context("failed to resolve Cargo dependencies")?;
 
+        let active_optional_dependencies: FxHashSet<_> = ws_resolve
+            .specs_and_features
+            .iter()
+            .flat_map(|spec| spec.resolved_features.activated_dependencies.iter())
+            .flat_map(|((package_id, _), dependencies)| {
+                dependencies
+                    .iter()
+                    .map(move |dependency| (*package_id, *dependency))
+            })
+            .collect();
+
         let pkg_set = ws_resolve.pkg_set;
         let resolve = ws_resolve.targeted_resolve;
 
@@ -683,6 +703,11 @@ impl ResolvedWorkspace {
                 let mut seen_build = false;
                 for dep in deps.iter() {
                     let kind = DependencyType::from(dep.kind());
+                    if dep.is_optional()
+                        && !active_optional_dependencies.contains(&(pkg_id, dep.name_in_toml()))
+                    {
+                        continue;
+                    }
                     if !edge_kinds.includes(kind)
                         || (edge_kinds.public && !dep.is_public())
                         || (edge_kinds.no_proc_macro
@@ -1274,6 +1299,7 @@ fn ensure_feature_node(
     } else {
         let id = NodeId(nodes.len());
         nodes.push(DependencyNode::Feature(DependencyFeature {
+            package_name: owner.name().as_str().to_owned(),
             name: name.clone(),
             command_line: false,
             children: Vec::new(),

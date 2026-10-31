@@ -1,5 +1,6 @@
 use ratatui::{
     layout::Rect,
+    style::{Color, Style},
     text::{Line, Span},
     widgets::Block,
 };
@@ -275,16 +276,29 @@ impl<'a, 's> RenderContext<'a, 's> {
                 spans.push(Span::styled(group.label().to_string(), group_style));
             }
             DependencyNode::Feature(feature) => {
+                let is_search_match = self.state.is_search_match(node_id);
                 let feature_style = if lineage.is_selected {
                     self.style.highlight_style
-                } else if self.state.is_search_match(node_id) {
+                } else if is_search_match {
                     self.style.filtered_style
                 } else {
                     clap_cargo::style::DEP_FEATURE.into()
                 };
-                spans.push(Span::styled(feature.name.clone(), feature_style));
+                let prefix_style = if lineage.is_selected || is_search_match {
+                    feature_style
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                spans.push(Span::styled(
+                    format!("{} feature ", feature.package_name),
+                    prefix_style,
+                ));
+                spans.push(Span::styled(format!("\"{}\"", feature.name), feature_style));
                 if feature.command_line {
                     spans.push(Span::styled(" (command-line)", self.style.suffix_style));
+                }
+                if self.tree.is_duplicate(node_id) {
+                    spans.push(Span::styled(" (*)", self.style.suffix_style));
                 }
             }
         }
