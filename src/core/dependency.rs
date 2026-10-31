@@ -5,7 +5,7 @@ use cargo::{
     GlobalContext,
     core::{
         Package, PackageId, Workspace,
-        compiler::{CompileKind, CompileKindFallback, RustcTargetData},
+        compiler::{CompileKind, RustcTargetData},
         dependency::DepKind,
         resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
     },
@@ -184,7 +184,15 @@ impl DependencyTree {
     /// Resolves the Cargo workspace via the `cargo` library and converts the
     /// resolved graph into a [`DependencyTree`].
     pub fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
-        let resolved = ResolvedWorkspace::load(manifest_path)?;
+        Self::load_with_options(manifest_path, &ResolutionOptions::default())
+    }
+
+    /// Resolves the Cargo workspace using the supplied Cargo resolver options.
+    pub fn load_with_options(
+        manifest_path: Option<PathBuf>,
+        options: &ResolutionOptions,
+    ) -> Result<Self> {
+        let resolved = ResolvedWorkspace::load(manifest_path, options)?;
         let workspace_name = resolved.workspace_name.clone();
         let mut collected = collect_packages(&resolved);
         let parents = wire_edges(&resolved, &collected.pkg_index, &mut collected.nodes);
@@ -214,6 +222,23 @@ impl DependencyTree {
             .enumerate()
             .filter_map(|(idx, node)| (!node.is_group()).then_some(NodeId(idx)))
     }
+}
+
+/// Cargo resolver options that affect which packages and dependency edges are
+/// present in the dependency tree.
+#[derive(Debug, Default)]
+pub struct ResolutionOptions {
+    /// Explicit target triples. The special value `all` is handled like
+    /// `--all-targets`.
+    pub targets: Vec<String>,
+    /// Resolve dependencies for every target, including tests and examples.
+    pub all_targets: bool,
+    /// Features requested on the command line.
+    pub features: Vec<String>,
+    /// Activate every available feature.
+    pub all_features: bool,
+    /// Do not activate the default feature.
+    pub no_default_features: bool,
 }
 
 /// Snapshot of a Cargo package with the fields required fields.
@@ -258,31 +283,44 @@ impl ResolvedWorkspace {
     /// reachable package into a compact [`PackageSnapshot`], classifies outgoing
     /// edges by dependency kind, and records the workspace member ids that act
     /// as graph roots.
-    fn load(manifest_path: Option<PathBuf>) -> Result<Self> {
+    fn load(manifest_path: Option<PathBuf>, options: &ResolutionOptions) -> Result<Self> {
         let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
         let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
         let ws = Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
 
-        let requested_kinds = CompileKind::from_requested_targets_with_fallback(
-            ws.gctx(),
-            &[],
-            CompileKindFallback::JustHost,
-        )
-        .context("failed to determine Cargo target kinds")?;
+        let all_targets =
+            options.all_targets || (options.targets.len() == 1 && options.targets[0] == "all");
+        let requested_targets = if all_targets {
+            &[]
+        } else {
+            options.targets.as_slice()
+        };
+        let requested_kinds = CompileKind::from_requested_targets(ws.gctx(), requested_targets)
+            .context("failed to determine Cargo target kinds")?;
 
         let mut target_data =
             RustcTargetData::new(&ws, &requested_kinds).context("failed to load target data")?;
         let specs = ops::Packages::All(Vec::new())
             .to_package_id_specs(&ws)
             .context("failed to resolve workspace package specs")?;
+        let cli_features = CliFeatures::from_command_line(
+            &options.features,
+            options.all_features,
+            !options.no_default_features,
+        )
+        .context("failed to parse Cargo features")?;
         let ws_resolve = ops::resolve_ws_with_opts(
             &ws,
             &mut target_data,
             &requested_kinds,
-            &CliFeatures::new_all(true),
+            &cli_features,
             &specs,
             HasDevUnits::Yes,
-            ForceAllTargets::Yes,
+            if all_targets {
+                ForceAllTargets::Yes
+            } else {
+                ForceAllTargets::No
+            },
             false,
         )
         .context("failed to resolve Cargo dependencies")?;
