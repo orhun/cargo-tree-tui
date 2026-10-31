@@ -101,5 +101,10 @@ pub fn draw_help_popup(frame: &mut Frame) {
 }
 
 pub fn draw_selector_popup(frame: &mut Frame, area: Rect, selector: &SelectorState) {
-    frame.render_widget(SelectorPopup::new(selector), area);
+    let popup = SelectorPopup::new(selector);
+    let cursor_position = popup.cursor_position(area);
+    frame.render_widget(popup, area);
+    if let Some(position) = cursor_position {
+        frame.set_cursor_position(position);
+    }
 }
