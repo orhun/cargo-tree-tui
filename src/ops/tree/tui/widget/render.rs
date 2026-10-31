@@ -274,6 +274,19 @@ impl<'a, 's> RenderContext<'a, 's> {
                 };
                 spans.push(Span::styled(group.label().to_string(), group_style));
             }
+            DependencyNode::Feature(feature) => {
+                let feature_style = if lineage.is_selected {
+                    self.style.highlight_style
+                } else if self.state.is_search_match(node_id) {
+                    self.style.filtered_style
+                } else {
+                    clap_cargo::style::DEP_FEATURE.into()
+                };
+                spans.push(Span::styled(feature.name.clone(), feature_style));
+                if feature.command_line {
+                    spans.push(Span::styled(" (command-line)", self.style.suffix_style));
+                }
+            }
         }
 
         Some(Line::from(spans))

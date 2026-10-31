@@ -1,0 +1,10 @@
+[package]
+name = "feature-cli-app"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+ui = ["feature-cli-codec/derive"]
+
+[dependencies]
+feature-cli-codec = { path = "../codec" }
