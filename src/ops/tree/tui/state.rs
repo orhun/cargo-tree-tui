@@ -763,10 +763,10 @@ impl TuiState {
             Err(error) => {
                 self.resolution_applying = false;
                 self.invert_reverting = false;
-                if self.invert_restore.is_some() {
-                    if let Some(target) = &self.invert_target {
-                        self.invert_prompt = Some(format!("{target} ({error})"));
-                    }
+                if self.invert_restore.is_some()
+                    && let Some(target) = &self.invert_target
+                {
+                    self.invert_prompt = Some(format!("{target} ({error})"));
                 }
                 if let Some(selector) = self.selector.as_mut() {
                     selector.applying = false;
@@ -897,9 +897,7 @@ fn toggle_package_option(selector: &mut SelectorState) {
         }
         value if value.starts_with(INCLUDE_PACKAGE) => {
             for option in &mut selector.options {
-                if option.value == WORKSPACE_PACKAGES {
-                    option.checked = false;
-                } else if option.value.starts_with(EXCLUDE_PACKAGE) {
+                if option.value == WORKSPACE_PACKAGES || option.value.starts_with(EXCLUDE_PACKAGE) {
                     option.checked = false;
                 }
             }

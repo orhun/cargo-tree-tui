@@ -158,7 +158,7 @@ impl SelectorState {
             .iter()
             .enumerate()
             .filter_map(|(index, option)| {
-                (option.tab.map_or(true, |tab| tab == self.selected_tab)
+                (option.tab.is_none_or(|tab| tab == self.selected_tab)
                     && option.label.to_lowercase().contains(&filter))
                 .then_some(index)
             })
