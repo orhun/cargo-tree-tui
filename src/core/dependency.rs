@@ -350,6 +350,22 @@ pub fn workspace_features(manifest_path: Option<PathBuf>) -> Result<Vec<String>>
     Ok(features.into_iter().collect())
 }
 
+/// Package names declared by members of a Cargo workspace.
+///
+/// This is loaded lazily by the TUI when the package selector is opened.
+pub fn workspace_packages(manifest_path: Option<PathBuf>) -> Result<Vec<String>> {
+    let gctx = GlobalContext::default().context("failed to initialize Cargo context")?;
+    let manifest_path = resolve_manifest_path(&gctx, manifest_path)?;
+    let workspace =
+        Workspace::new(&manifest_path, &gctx).context("failed to load Cargo workspace")?;
+
+    let packages = workspace
+        .members()
+        .map(|package| package.name().as_str().to_owned())
+        .collect::<BTreeSet<_>>();
+    Ok(packages.into_iter().collect())
+}
+
 #[derive(Debug, Clone, Copy)]
 struct EdgeKinds {
     normal: bool,

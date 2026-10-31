@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
 
 use super::TuiTree;
 use super::selector::{SelectorOption, SelectorState};
-use crate::core::dependency::{DependencyType, workspace_features};
+use crate::core::dependency::{DependencyType, workspace_features, workspace_packages};
 use crate::core::{PackageFormatRequirements, ResolutionOptions};
 
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
@@ -23,6 +23,7 @@ enum SelectorKind {
     EdgeKinds,
     Targets,
     Features,
+    Packages,
 }
 
 #[derive(Debug)]
@@ -82,6 +83,7 @@ pub struct TuiState {
     pub selector: Option<SelectorState>,
     selector_kind: Option<SelectorKind>,
     feature_choices: Option<Vec<String>>,
+    package_choices: Option<Vec<String>>,
     pub prefix: TreePrefix,
     pub charset: TreeCharset,
     pub format: TreeFormat,
@@ -121,6 +123,7 @@ impl TuiState {
             selector: None,
             selector_kind: None,
             feature_choices: None,
+            package_choices: None,
             prefix,
             charset,
             format,
@@ -236,6 +239,9 @@ impl TuiState {
                 self.open_feature_selector();
             }
             (KeyCode::Char('p'), _) => {
+                self.open_package_selector();
+            }
+            (KeyCode::Char('P'), _) => {
                 self.tree_widget_state.select_parent(&self.dependency_tree);
             }
             (KeyCode::Char(']'), _) => {
@@ -405,6 +411,68 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
+    fn open_package_selector(&mut self) {
+        let mut load_error = None;
+        let choices = if let Some(choices) = &self.package_choices {
+            choices.clone()
+        } else {
+            match workspace_packages(self.tree_options.manifest_path.clone()) {
+                Ok(choices) => {
+                    self.package_choices = Some(choices.clone());
+                    choices
+                }
+                Err(error) => {
+                    load_error = Some(error.to_string());
+                    Vec::new()
+                }
+            }
+        };
+
+        let resolution = &self.tree_options.resolution;
+        let mut packages = choices;
+        for package in resolution.packages.iter().chain(&resolution.exclude) {
+            if !packages.contains(package) {
+                packages.push(package.clone());
+            }
+        }
+        packages.sort_unstable();
+        packages.dedup();
+
+        let mut options = vec![
+            SelectorOption::new(
+                WORKSPACE_PACKAGES,
+                "All workspace packages",
+                resolution.workspace,
+            )
+            .in_tab(0),
+        ];
+        options.extend(packages.iter().map(|package| {
+            SelectorOption::new(
+                format!("{INCLUDE_PACKAGE}{package}"),
+                package.clone(),
+                resolution.packages.contains(package),
+            )
+            .in_tab(0)
+        }));
+        options.extend(packages.iter().map(|package| {
+            SelectorOption::new(
+                format!("{EXCLUDE_PACKAGE}{package}"),
+                package.clone(),
+                resolution.exclude.contains(package),
+            )
+            .in_tab(1)
+        }));
+
+        let mut selector = SelectorState::new("Package selection", options)
+            .filterable()
+            .max_height(20)
+            .tabs(vec!["Package".to_owned(), "Exclude".to_owned()]);
+        selector.message = load_error;
+        self.selector = Some(selector);
+        self.selector_kind = Some(SelectorKind::Packages);
+        self.input_mode = InputMode::Selector;
+    }
+
     fn handle_selector_key(&mut self, key: KeyCode) {
         let Some(selector) = self.selector.as_mut() else {
             self.input_mode = InputMode::Normal;
@@ -425,6 +493,10 @@ impl TuiState {
             }
             KeyCode::Up => selector.move_up(),
             KeyCode::Down => selector.move_down(),
+            KeyCode::Tab if selector.has_tabs() => selector.next_tab(),
+            KeyCode::Char(' ') if self.selector_kind == Some(SelectorKind::Packages) => {
+                toggle_package_option(selector);
+            }
             KeyCode::Char(' ') => selector.toggle_selected(),
             KeyCode::Backspace => selector.pop_filter_char(),
             KeyCode::Char(ch) => selector.push_filter_char(ch),
@@ -438,6 +510,7 @@ impl TuiState {
             Some(SelectorKind::EdgeKinds) => self.apply_edge_selection(),
             Some(SelectorKind::Targets) => self.apply_target_selection(),
             Some(SelectorKind::Features) => self.apply_feature_selection(),
+            Some(SelectorKind::Packages) => self.apply_package_selection(),
             None => {}
         }
     }
@@ -584,6 +657,59 @@ impl TuiState {
         }
     }
 
+    fn apply_package_selection(&mut self) {
+        let Some(selector) = self.selector.as_ref() else {
+            return;
+        };
+        let selected = selector.checked_values();
+        let workspace = selected.iter().any(|value| value == WORKSPACE_PACKAGES);
+        let packages = selected
+            .iter()
+            .filter_map(|value| value.strip_prefix(INCLUDE_PACKAGE))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let exclude = selected
+            .iter()
+            .filter_map(|value| value.strip_prefix(EXCLUDE_PACKAGE))
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+
+        let current = &self.tree_options.resolution;
+        let mut current_packages = current.packages.clone();
+        current_packages.sort_unstable();
+        let mut current_exclude = current.exclude.clone();
+        current_exclude.sort_unstable();
+        if workspace == current.workspace
+            && packages == current_packages
+            && exclude == current_exclude
+        {
+            self.selector = None;
+            self.selector_kind = None;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        let mut options = self.tree_options.clone();
+        options.resolution.workspace = workspace;
+        options.resolution.packages = packages;
+        options.resolution.exclude = exclude;
+        self.resolution_generation = self.resolution_generation.wrapping_add(1);
+        let request = TreeResolutionRequest {
+            generation: self.resolution_generation,
+            format_requirements: self.format.requirements(),
+            options,
+        };
+
+        if self.resolution_tx.send(request).is_ok() {
+            if let Some(selector) = self.selector.as_mut() {
+                selector.applying = true;
+                selector.message = None;
+            }
+        } else if let Some(selector) = self.selector.as_mut() {
+            selector.message = Some("Could not start dependency resolution".to_owned());
+        }
+    }
+
     fn handle_tree_resolved(&mut self, result: TreeResolutionResult) {
         if result.generation != self.resolution_generation {
             return;
@@ -652,6 +778,57 @@ const EDGE_KINDS: [DependencyType; 3] = [
 const DEFAULT_TARGET: &str = "__cargo_tree_tui_default_target";
 const DEFAULT_FEATURES: &str = "__cargo_tree_tui_default_features";
 const ALL_FEATURES: &str = "__cargo_tree_tui_all_features";
+const WORKSPACE_PACKAGES: &str = "__cargo_tree_tui_workspace_packages";
+const INCLUDE_PACKAGE: &str = "__cargo_tree_tui_include_package:";
+const EXCLUDE_PACKAGE: &str = "__cargo_tree_tui_exclude_package:";
+
+fn toggle_package_option(selector: &mut SelectorState) {
+    let Some(&option_index) = selector.visible_options().get(selector.selected) else {
+        return;
+    };
+    let value = selector.options[option_index].value.clone();
+    selector.toggle_selected();
+
+    if !selector.options[option_index].checked {
+        if value == WORKSPACE_PACKAGES {
+            for option in &mut selector.options {
+                if option.value.starts_with(EXCLUDE_PACKAGE) {
+                    option.checked = false;
+                }
+            }
+        }
+        return;
+    }
+
+    match value.as_str() {
+        WORKSPACE_PACKAGES => {
+            for option in &mut selector.options {
+                if option.value.starts_with(INCLUDE_PACKAGE) {
+                    option.checked = false;
+                }
+            }
+        }
+        value if value.starts_with(INCLUDE_PACKAGE) => {
+            for option in &mut selector.options {
+                if option.value == WORKSPACE_PACKAGES {
+                    option.checked = false;
+                } else if option.value.starts_with(EXCLUDE_PACKAGE) {
+                    option.checked = false;
+                }
+            }
+        }
+        value if value.starts_with(EXCLUDE_PACKAGE) => {
+            for option in &mut selector.options {
+                if option.value == WORKSPACE_PACKAGES {
+                    option.checked = true;
+                } else if option.value.starts_with(INCLUDE_PACKAGE) {
+                    option.checked = false;
+                }
+            }
+        }
+        _ => {}
+    }
+}
 
 fn target_choices() -> &'static [String] {
     static TARGET_CHOICES: OnceLock<Vec<String>> = OnceLock::new();
