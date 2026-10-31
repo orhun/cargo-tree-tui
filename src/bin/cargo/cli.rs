@@ -46,7 +46,25 @@ pub struct TreeArgs {
     pub no_dev_dependencies: bool,
 
     /// The kinds of dependencies to display
-    #[arg(short = 'e', long = "edges", value_name = "KINDS", action = ArgAction::Append)]
+    #[arg(
+        short = 'e',
+        long = "edges",
+        value_name = "KINDS",
+        value_delimiter = ',',
+        value_parser = [
+            "all",
+            "normal",
+            "build",
+            "dev",
+            "features",
+            "public",
+            "no-normal",
+            "no-build",
+            "no-dev",
+            "no-proc-macro"
+        ],
+        action = ArgAction::Append
+    )]
     pub edges: Vec<String>,
 
     /// Invert the tree direction and focus on the given package

@@ -1,10 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use cargo::{
     GlobalContext,
     core::{
-        Package, PackageId, PackageIdSpecQuery, Workspace,
+        Package, PackageId, PackageIdSpec, PackageIdSpecQuery, Workspace,
         compiler::{CompileKind, RustcTargetData},
         dependency::DepKind,
         resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
@@ -234,6 +234,14 @@ pub struct ResolutionOptions {
     pub packages: Vec<String>,
     /// Exclude workspace members when `workspace` is enabled.
     pub exclude: Vec<String>,
+    /// Dependency kinds to retain in the tree.
+    pub edges: Vec<String>,
+    /// Deprecated alias for excluding development dependencies.
+    pub no_dev_dependencies: bool,
+    /// Packages to omit wherever they occur as dependencies.
+    pub prune: Vec<String>,
+    /// Maximum dependency depth to expand initially in the TUI.
+    pub depth: Option<usize>,
     /// Explicit target triples. The special value `all` is handled like
     /// `--all-targets`.
     pub targets: Vec<String>,
@@ -245,6 +253,84 @@ pub struct ResolutionOptions {
     pub all_features: bool,
     /// Do not activate the default feature.
     pub no_default_features: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EdgeKinds {
+    normal: bool,
+    build: bool,
+    dev: bool,
+}
+
+impl EdgeKinds {
+    fn from_options(options: &ResolutionOptions) -> Result<Self> {
+        let mut kinds: Vec<&str> = options.edges.iter().map(String::as_str).collect();
+        if options.no_dev_dependencies {
+            kinds.push("no-dev");
+        }
+
+        for kind in &kinds {
+            if matches!(*kind, "all" | "features" | "public" | "no-proc-macro") {
+                bail!("`--edges={kind}` is not supported by cargo-tree-tui yet");
+            }
+        }
+
+        if kinds.is_empty() {
+            return Ok(Self::all());
+        }
+
+        let has_negative = kinds.iter().any(|kind| kind.starts_with("no-"));
+        if has_negative {
+            if kinds
+                .iter()
+                .any(|kind| matches!(*kind, "all" | "normal" | "build" | "dev"))
+            {
+                bail!("dependency kinds cannot be mixed with `no-*` dependency kinds");
+            }
+
+            let mut selected = Self::all();
+            for kind in kinds {
+                match kind {
+                    "no-normal" => selected.normal = false,
+                    "no-build" => selected.build = false,
+                    "no-dev" => selected.dev = false,
+                    _ => bail!("invalid dependency kind `{kind}`"),
+                }
+            }
+            return Ok(selected);
+        }
+
+        let mut selected = Self {
+            normal: false,
+            build: false,
+            dev: false,
+        };
+        for kind in kinds {
+            match kind {
+                "normal" => selected.normal = true,
+                "build" => selected.build = true,
+                "dev" => selected.dev = true,
+                _ => bail!("invalid dependency kind `{kind}`"),
+            }
+        }
+        Ok(selected)
+    }
+
+    fn all() -> Self {
+        Self {
+            normal: true,
+            build: true,
+            dev: true,
+        }
+    }
+
+    fn includes(self, kind: DependencyType) -> bool {
+        match kind {
+            DependencyType::Normal => self.normal,
+            DependencyType::Build => self.build,
+            DependencyType::Dev => self.dev,
+        }
+    }
 }
 
 /// Snapshot of a Cargo package with the fields required fields.
@@ -315,6 +401,15 @@ impl ResolvedWorkspace {
         let specs = packages
             .to_package_id_specs(&ws)
             .context("failed to resolve selected package specs")?;
+        let edge_kinds = EdgeKinds::from_options(options)?;
+        let prune_specs = options
+            .prune
+            .iter()
+            .map(|spec| {
+                PackageIdSpec::parse(spec)
+                    .with_context(|| format!("invalid package spec to prune: `{spec}`"))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let cli_features = CliFeatures::from_command_line(
             &options.features,
             options.all_features,
@@ -327,7 +422,11 @@ impl ResolvedWorkspace {
             &requested_kinds,
             &cli_features,
             &specs,
-            HasDevUnits::Yes,
+            if edge_kinds.dev {
+                HasDevUnits::Yes
+            } else {
+                HasDevUnits::No
+            },
             if all_targets {
                 ForceAllTargets::Yes
             } else {
@@ -369,6 +468,11 @@ impl ResolvedWorkspace {
                 let mut seen_build = false;
                 for dep in deps.iter() {
                     let kind = DependencyType::from(dep.kind());
+                    if !edge_kinds.includes(kind)
+                        || prune_specs.iter().any(|spec| spec.matches(dep_id))
+                    {
+                        continue;
+                    }
                     let already = match kind {
                         DependencyType::Normal => std::mem::replace(&mut seen_normal, true),
                         DependencyType::Dev => std::mem::replace(&mut seen_dev, true),

@@ -47,9 +47,17 @@ pub struct TuiState {
 }
 
 impl TuiState {
-    pub fn new(dependency_tree: DependencyTree, search_tx: Sender<SearchRequest>) -> Self {
+    pub fn new(
+        dependency_tree: DependencyTree,
+        search_tx: Sender<SearchRequest>,
+        depth: Option<usize>,
+    ) -> Self {
         let mut tree_widget_state = TreeWidgetState::default();
-        tree_widget_state.expand_all(&dependency_tree);
+        if let Some(depth) = depth {
+            tree_widget_state.open_to_dependency_depth(&dependency_tree, depth);
+        } else {
+            tree_widget_state.expand_all(&dependency_tree);
+        }
         TuiState {
             running: true,
             dependency_tree,

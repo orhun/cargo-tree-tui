@@ -446,6 +446,54 @@ impl TreeWidgetState {
         self.ensure_selection(tree);
     }
 
+    /// Opens nodes so the initial view includes dependencies through the given
+    /// crate depth. Synthetic dependency-group nodes do not count toward depth.
+    pub fn open_to_dependency_depth(&mut self, tree: &DependencyTree, max_depth: usize) {
+        self.ensure_node_capacity(tree);
+        self.open.fill(false);
+        let mut ancestors = FxHashSet::default();
+        for &root in tree.roots() {
+            self.open_dependency_node(tree, root, 0, max_depth, &mut ancestors);
+        }
+        self.subtree_dirty = true;
+        self.dirty = true;
+        self.ensure_selection(tree);
+    }
+
+    fn open_dependency_node(
+        &mut self,
+        tree: &DependencyTree,
+        id: NodeId,
+        crate_depth: usize,
+        max_depth: usize,
+        ancestors: &mut FxHashSet<NodeId>,
+    ) {
+        if crate_depth >= max_depth {
+            return;
+        }
+
+        if let Some(node) = tree.node(id) {
+            if node.children().is_empty() {
+                return;
+            }
+
+            self.open[id.0] = true;
+            ancestors.insert(id);
+            for &child in node.children() {
+                if ancestors.contains(&child) {
+                    continue;
+                }
+                let child_depth = if tree.node(child).is_some_and(DependencyNode::is_group) {
+                    crate_depth
+                } else {
+                    crate_depth + 1
+                };
+                self.open_dependency_node(tree, child, child_depth, max_depth, ancestors);
+            }
+            ancestors.remove(&id);
+        }
+    }
+
     fn open_node(
         &mut self,
         tree: &DependencyTree,
