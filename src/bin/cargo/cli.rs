@@ -109,7 +109,7 @@ pub struct TreeArgs {
     #[arg(long = "charset", value_name = "CHARSET", value_enum)]
     pub charset: Option<Charset>,
 
-    /// Format string used for printing dependencies
+    /// Format package labels with Cargo placeholders (default: {p})
     #[arg(
         short = 'f',
         long = "format",

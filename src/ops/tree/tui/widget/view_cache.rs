@@ -502,6 +502,7 @@ mod tests {
                     version: String::from("0.0.0"),
                     manifest_dir: None,
                     is_proc_macro: false,
+                    format_metadata: None,
                     children: children.iter().copied().map(NodeId).collect(),
                 })
             })

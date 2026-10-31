@@ -11,12 +11,14 @@ use crate::ops::tree::tui::{TuiTree, widget::viewport::Viewport};
 use self::{breadcrumb::Breadcrumb, render::RenderContext};
 
 pub use self::{
+    format::TreeFormat,
     render::RenderOutput,
     state::{SearchState, TreeWidgetState, VisIdx},
     style::{TreeCharset, TreePrefix, TreeWidgetStyle},
 };
 
 mod breadcrumb;
+mod format;
 mod lineage;
 pub mod render;
 pub mod state;
@@ -32,6 +34,7 @@ pub struct TreeWidget<'a> {
     scrollbar: Option<Scrollbar<'a>>,
     search_query: Option<&'a str>,
     search_prompt_symbol: char,
+    format: Option<&'a TreeFormat>,
     style: TreeWidgetStyle,
     prefix: TreePrefix,
 }
@@ -44,6 +47,7 @@ impl<'a> TreeWidget<'a> {
             scrollbar: None,
             search_query: None,
             search_prompt_symbol: '/',
+            format: None,
             style: TreeWidgetStyle::default(),
             prefix: TreePrefix::default(),
         }
@@ -78,6 +82,11 @@ impl<'a> TreeWidget<'a> {
         self.style.set_charset(charset);
         self
     }
+
+    pub fn format(mut self, format: &'a TreeFormat) -> Self {
+        self.format = Some(format);
+        self
+    }
 }
 
 impl StatefulWidget for TreeWidget<'_> {
@@ -95,7 +104,14 @@ impl StatefulWidget for TreeWidget<'_> {
             total_lines,
             viewport,
         } = {
-            let mut ctx = RenderContext::new(self.tree, state, &self.style, block_ref, self.prefix);
+            let mut ctx = RenderContext::new(
+                self.tree,
+                state,
+                &self.style,
+                block_ref,
+                self.prefix,
+                self.format,
+            );
             ctx.render(area)
         };
 
