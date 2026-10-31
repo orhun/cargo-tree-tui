@@ -4,7 +4,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event as CrosstermEvent};
 
 use cargo_tree_tui::{
-    core::DependencyTree,
+    core::{DependencyTree, ResolutionOptions},
     ops::tree::tui::{
         draw_tui,
         state::{Event, SearchRequest, SearchResult, TuiState},
@@ -16,7 +16,15 @@ use crate::cli::TreeArgs;
 
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
-    let dependency_tree = DependencyTree::load(args.manifest_path)?;
+    let resolution_options = ResolutionOptions {
+        targets: args.target,
+        all_targets: args.all_targets,
+        features: args.features,
+        all_features: args.all_features,
+        no_default_features: args.no_default_features,
+    };
+    let dependency_tree =
+        DependencyTree::load_with_options(args.manifest_path, &resolution_options)?;
 
     let (search_tx, search_rx) = mpsc::channel::<SearchRequest>();
     let (event_tx, event_rx) = mpsc::channel::<Event>();
