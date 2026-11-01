@@ -120,6 +120,7 @@ impl PackageFormatRequirements {
         self.metadata = true;
         self.license = true;
         self.repository = true;
+        self.features = true;
         self.library = true;
         self.source = true;
         self
@@ -989,6 +990,13 @@ impl ResolvedWorkspace {
                 return false;
             }
             dependencies.retain(|(dependency_id, _)| graph_scope.contains(dependency_id));
+            true
+        });
+        usages.retain(|package_id, dependencies| {
+            if !graph_scope.contains(package_id) {
+                return false;
+            }
+            dependencies.retain(|usage| graph_scope.contains(&usage.parent));
             true
         });
 

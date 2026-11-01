@@ -12,7 +12,7 @@ use ratatui::{
         StatefulWidget, Tabs, Widget, Wrap,
     },
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{
     core::{
@@ -57,8 +57,21 @@ pub struct MetadataPopupState {
     pub tab: MetadataTab,
     pub scroll: usize,
     pub(crate) page_size: usize,
-    source_package_nodes: Option<FxHashMap<PackageId, NodeId>>,
+    graph_index: Option<GraphIndex>,
     usage_tree: Option<UsageTree>,
+}
+
+#[derive(Debug, Default)]
+struct GraphIndex {
+    package_nodes: FxHashMap<PackageId, NodeId>,
+    versions_by_name: FxHashMap<String, Vec<String>>,
+    dependent_counts: FxHashMap<PackageId, DependentCounts>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct DependentCounts {
+    direct: usize,
+    total: usize,
 }
 
 #[derive(Debug)]
@@ -73,7 +86,7 @@ struct UsageTree {
 impl MetadataPopupState {
     pub fn invalidate_usage_tree(&mut self) {
         self.usage_tree = None;
-        self.source_package_nodes = None;
+        self.graph_index = None;
     }
 
     pub fn move_usage_selection(&mut self, down: bool) {
@@ -116,13 +129,13 @@ impl<'a> MetadataPopup<'a> {
         }
     }
 
-    fn package_lines(&self) -> Text<'_> {
+    fn package_lines(&self, graph_index: &mut GraphIndex) -> Text<'_> {
         let Some(dependency) = self.dependency else {
             return Text::from(" No dependency selected ");
         };
 
         let metadata = dependency.format_metadata.as_deref();
-        let mut lines = Vec::with_capacity(15);
+        let mut lines = Vec::with_capacity(24);
         push_field_styled(&mut lines, "Name", &dependency.name, Style::from(WARN));
         push_field(&mut lines, "Version", &dependency.version);
         push_field(
@@ -219,6 +232,51 @@ impl<'a> MetadataPopup<'a> {
             push_field(&mut lines, "Manifest", path.as_str());
         }
 
+        if let Some(package_id) = dependency.package_id {
+            lines.push(Line::from("").style(Style::from(NOP)));
+            lines.push(Line::from(Span::styled(
+                "Resolved in this graph",
+                Style::from(HEADER).add_modifier(Modifier::BOLD),
+            )));
+            let mut versions = graph_index
+                .versions_by_name
+                .get(&dependency.name)
+                .cloned()
+                .unwrap_or_else(|| vec![dependency.version.clone()]);
+            if let Some(current) = versions
+                .iter()
+                .position(|version| version == &dependency.version)
+            {
+                versions.swap(0, current);
+            }
+            let version_count = versions.len();
+            let version_count_style = if version_count > 1 {
+                Style::from(WARN)
+            } else {
+                Style::default()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Versions in graph", Style::from(VALID)),
+                Span::raw(" ".repeat(18 - "Versions in graph".len() + 1)),
+                Span::styled(version_count.to_string(), version_count_style),
+                Span::raw(format!(" ({})", versions.join(", "))),
+            ]));
+            let dependents = graph_index.dependents(package_id, self.source_tree);
+            push_field(
+                &mut lines,
+                "Dependents",
+                format!("{} direct / {} total", dependents.direct, dependents.total),
+            );
+            push_field(
+                &mut lines,
+                "Enabled features",
+                metadata
+                    .and_then(|metadata| metadata.features.as_deref())
+                    .map(|features| features.split(',').collect::<Vec<_>>().join(", "))
+                    .unwrap_or_else(|| "none".to_owned()),
+            );
+        }
+
         Text::from(lines)
     }
 }
@@ -228,7 +286,7 @@ impl StatefulWidget for MetadataPopup<'_> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         let width = area.width / 2;
-        let height = area.height.saturating_sub(2).min(20);
+        let height = area.height.saturating_sub(2).min(30);
         if width < 4 || height < 3 {
             return;
         }
@@ -282,7 +340,15 @@ impl StatefulWidget for MetadataPopup<'_> {
         block.render(popup_area, buf);
         match state.tab {
             MetadataTab::Package => {
-                let lines = self.package_lines();
+                if state.graph_index.is_none() {
+                    state.graph_index = Some(GraphIndex::new(self.source_tree));
+                }
+                let lines = self.package_lines(
+                    state
+                        .graph_index
+                        .as_mut()
+                        .expect("graph index was initialized"),
+                );
                 let content_height = wrapped_line_count(&lines, content_area.width as usize);
                 state.page_size = content_area.height as usize;
                 let paragraph = Paragraph::new(lines)
@@ -321,8 +387,8 @@ impl MetadataPopup<'_> {
         };
 
         let package_id = dependency.package_id;
-        if state.source_package_nodes.is_none() {
-            state.source_package_nodes = Some(source_package_nodes(self.source_tree));
+        if state.graph_index.is_none() {
+            state.graph_index = Some(GraphIndex::new(self.source_tree));
         }
         if state
             .usage_tree
@@ -333,10 +399,11 @@ impl MetadataPopup<'_> {
                 dependency,
                 usages,
                 self.source_tree,
-                state
-                    .source_package_nodes
+                &state
+                    .graph_index
                     .as_ref()
-                    .expect("source package index was initialized"),
+                    .expect("graph index was initialized")
+                    .package_nodes,
             );
             state.usage_tree = Some(usage_tree);
         }
@@ -358,12 +425,9 @@ impl MetadataPopup<'_> {
         let declaration_height = declaration
             .as_ref()
             .map(|(section, text)| {
-                2 + Line::from(text.as_str())
-                    .width()
-                    .div_ceil(details_column.width.saturating_sub(2).max(1) as usize)
-                    + Line::from(section.as_str())
-                        .width()
-                        .div_ceil(details_column.width.max(1) as usize)
+                let content_width = details_column.width.saturating_sub(2).max(1) as usize;
+                2 + Line::from(text.as_str()).width().div_ceil(content_width)
+                    + Line::from(section.as_str()).width().div_ceil(content_width)
             })
             .unwrap_or(0)
             .min(details_column.height.saturating_sub(1) as usize)
@@ -459,18 +523,22 @@ impl MetadataPopup<'_> {
         }
 
         if let Some(declaration) = declaration {
-            let lines = Text::from(vec![
-                Line::styled(
-                    "Cargo.toml (simplified)",
-                    Style::from(HEADER).add_modifier(Modifier::BOLD),
-                ),
-                Line::from(declaration.0),
-                Line::from(declaration.1),
-            ]);
+            let block = Block::default()
+                .title(Line::from(Span::styled(
+                    " Cargo.toml (simplified) ",
+                    Style::from(HEADER)
+                        .add_modifier(Modifier::BOLD)
+                        .add_modifier(Modifier::REVERSED),
+                )))
+                .borders(Borders::ALL)
+                .border_style(Style::from(HEADER));
+            let content_area = block.inner(declaration_area);
+            block.render(declaration_area, buf);
+            let lines = Text::from(vec![Line::from(declaration.0), Line::from(declaration.1)]);
             Paragraph::new(lines)
                 .style(Style::from(NOP))
                 .wrap(Wrap { trim: false })
-                .render(declaration_area, buf);
+                .render(content_area, buf);
         }
     }
 }
@@ -595,16 +663,71 @@ fn build_usage_tree(
     }
 }
 
-fn source_package_nodes(source_tree: &TuiTree) -> FxHashMap<PackageId, NodeId> {
-    let mut nodes = FxHashMap::default();
-    for (index, node) in source_tree.nodes.iter().enumerate() {
-        if let Some(dependency) = node.as_dependency()
-            && let Some(package_id) = dependency.package_id
-        {
-            nodes.entry(package_id).or_insert(NodeId(index));
+impl GraphIndex {
+    fn new(source_tree: &TuiTree) -> Self {
+        let mut index = Self::default();
+        let mut pending = source_tree.roots.clone();
+        let mut visited = FxHashSet::default();
+        while let Some(node_index) = pending.pop() {
+            if !visited.insert(node_index) {
+                continue;
+            }
+            let Some(node) = source_tree.node(node_index) else {
+                continue;
+            };
+            let Some(dependency) = node.as_dependency() else {
+                pending.extend_from_slice(node.children());
+                continue;
+            };
+            if let Some(package_id) = dependency.package_id {
+                index.package_nodes.entry(package_id).or_insert(node_index);
+                let versions = index
+                    .versions_by_name
+                    .entry(dependency.name.clone())
+                    .or_default();
+                if !versions.contains(&dependency.version) {
+                    versions.push(dependency.version.clone());
+                }
+            }
+            pending.extend_from_slice(node.children());
         }
+        for versions in index.versions_by_name.values_mut() {
+            versions.sort();
+        }
+        index
     }
-    nodes
+
+    fn dependents(&mut self, package_id: PackageId, tree: &TuiTree) -> DependentCounts {
+        if let Some(counts) = self.dependent_counts.get(&package_id) {
+            return *counts;
+        }
+
+        let mut direct: FxHashSet<_> = tree
+            .dependency_usages
+            .get(&package_id)
+            .into_iter()
+            .flatten()
+            .map(|usage| usage.parent)
+            .collect();
+        direct.remove(&package_id);
+        let mut total = FxHashSet::default();
+        let mut pending: Vec<_> = direct.iter().copied().collect();
+        while let Some(parent) = pending.pop() {
+            if parent == package_id || !total.insert(parent) {
+                continue;
+            }
+            if let Some(usages) = tree.dependency_usages.get(&parent) {
+                pending.extend(usages.iter().map(|usage| usage.parent));
+            }
+        }
+
+        let counts = DependentCounts {
+            direct: direct.len(),
+            total: total.len(),
+        };
+        self.dependent_counts.insert(package_id, counts);
+        counts
+    }
 }
 
 fn wrapped_line_count(text: &Text<'_>, width: usize) -> usize {
