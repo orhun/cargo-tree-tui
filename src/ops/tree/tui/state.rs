@@ -267,29 +267,28 @@ impl TuiState {
                     self.metadata_popup.scroll = 0;
                     return;
                 }
-                KeyCode::PageDown => {
-                    if self.metadata_popup.tab == super::metadata::MetadataTab::Usage {
-                        return;
-                    } else {
+                _ => {}
+            }
+            if self.metadata_popup.tab == super::metadata::MetadataTab::Package
+                && key_event.modifiers.contains(KeyModifiers::SHIFT)
+            {
+                match key_event.code {
+                    KeyCode::PageDown => {
                         self.metadata_popup.scroll = self
                             .metadata_popup
                             .scroll
                             .saturating_add(self.metadata_popup.page_size.max(1));
-                    }
-                    return;
-                }
-                KeyCode::PageUp => {
-                    if self.metadata_popup.tab == super::metadata::MetadataTab::Usage {
                         return;
-                    } else {
+                    }
+                    KeyCode::PageUp => {
                         self.metadata_popup.scroll = self
                             .metadata_popup
                             .scroll
                             .saturating_sub(self.metadata_popup.page_size.max(1));
+                        return;
                     }
-                    return;
+                    _ => {}
                 }
-                _ => {}
             }
             if self.metadata_popup.tab == super::metadata::MetadataTab::Usage
                 && key_event.modifiers.contains(KeyModifiers::SHIFT)
