@@ -313,8 +313,16 @@ impl<'a> SelectorPopup<'a> {
             Line::from(" Format: ").width() + Line::from(editor.as_str()).width() + 2
         });
         let tabs_width = self.state.tab_titles().map_or(0, |tabs| {
-            tabs.iter().map(|tab| tab.chars().count()).sum::<usize>() + tabs.len().saturating_sub(1)
+            tabs.iter()
+                .map(|tab| Line::from(tab.as_str()).width())
+                .sum::<usize>()
+                .saturating_add(tabs.len().saturating_mul(2))
+                + tabs.len().saturating_sub(1)
         });
+        let title_width = self.state.tab_titles().map_or(0, |_| {
+            Line::from(format!(" {} ", self.state.title.to_uppercase())).width()
+        });
+        let header_width = title_width.saturating_add(tabs_width).saturating_add(2);
         let footer_width = if self.state.applying {
             "Resolving dependency graph...".len()
         } else if self.state.editor.is_some() {
@@ -338,6 +346,7 @@ impl<'a> SelectorPopup<'a> {
             .max(filter_width)
             .max(editor_width)
             .max(tabs_width)
+            .max(header_width)
             .max(message_width)
             .max(footer_width)
             .saturating_add(2)
@@ -349,7 +358,6 @@ impl<'a> SelectorPopup<'a> {
             .saturating_add(5)
             .saturating_add(usize::from(self.state.filter.is_some()))
             .saturating_add(usize::from(self.state.editor.is_some()))
-            .saturating_add(usize::from(self.state.has_tabs()))
             .saturating_add(usize::from(self.state.message.is_some()))
             .min(self.state.max_height)
             .min(usize::from(area.height));
@@ -394,9 +402,9 @@ impl<'a> SelectorPopup<'a> {
                 .saturating_add(10)
                 .saturating_add(cursor_column)
                 .min(popup_area.right().saturating_sub(2));
-            let y = popup_area.y.saturating_add(
-                1 + u16::from(self.state.has_tabs()) + u16::from(self.state.filter.is_some()),
-            );
+            let y = popup_area
+                .y
+                .saturating_add(1 + u16::from(self.state.filter.is_some()));
             return Some(Position::new(x, y));
         }
 
@@ -407,9 +415,7 @@ impl<'a> SelectorPopup<'a> {
             .saturating_add(Line::from("Filter: ").width() as u16)
             .saturating_add(Line::from(filter.as_str()).width() as u16)
             .min(popup_area.right().saturating_sub(2));
-        let y = popup_area
-            .y
-            .saturating_add(1 + u16::from(self.state.has_tabs()));
+        let y = popup_area.y.saturating_add(1);
         Some(Position::new(x, y))
     }
 }
@@ -425,8 +431,9 @@ impl Widget for SelectorPopup<'_> {
         };
         Clear.render(popup_area, buf);
 
+        let title = format!(" {} ", self.state.title.to_uppercase());
         let block = Block::new()
-            .title(format!(" {} ", self.state.title.to_uppercase()))
+            .title(title.as_str())
             .title_style(
                 Style::from(HEADER)
                     .add_modifier(Modifier::BOLD)
@@ -437,6 +444,41 @@ impl Widget for SelectorPopup<'_> {
         let selected_style = Style::from(HEADER).add_modifier(Modifier::BOLD);
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
+        if let Some(tabs) = self.state.tab_titles() {
+            let tab_titles = tabs.iter().enumerate().map(|(index, title)| {
+                let style = if index == self.state.selected_tab() {
+                    Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                } else {
+                    Style::from(NOP).add_modifier(Modifier::DIM)
+                };
+                Line::from(Span::styled(format!(" {title} "), style))
+            });
+            let tabs_width = tabs
+                .iter()
+                .map(|tab| Line::from(tab.as_str()).width())
+                .sum::<usize>()
+                .saturating_add(tabs.len().saturating_mul(2))
+                .saturating_add(tabs.len().saturating_sub(1))
+                .min(usize::from(u16::MAX)) as u16;
+            let tabs_x = popup_area
+                .right()
+                .saturating_sub(2)
+                .saturating_sub(tabs_width);
+            let tabs_area = Rect {
+                x: tabs_x,
+                y: popup_area.y,
+                width: tabs_width,
+                height: 1,
+            };
+            Tabs::new(tab_titles)
+                .select(self.state.selected_tab())
+                .highlight_style(
+                    Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::REVERSED),
+                )
+                .padding("", "")
+                .divider(Span::styled("│", Style::from(NOP)))
+                .render(tabs_area, buf);
+        }
 
         let items = self
             .state
@@ -463,9 +505,6 @@ impl Widget for SelectorPopup<'_> {
         );
         let footer_height = 1 + u16::from(self.state.message.is_some());
         let mut constraints = Vec::with_capacity(6);
-        if self.state.has_tabs() {
-            constraints.push(Constraint::Length(1));
-        }
         if self.state.filter.is_some() {
             constraints.push(Constraint::Length(1));
         }
@@ -480,23 +519,6 @@ impl Widget for SelectorPopup<'_> {
         ]);
         let areas = Layout::vertical(constraints).split(inner);
         let mut row = 0;
-        if let Some(tabs) = self.state.tab_titles() {
-            let selected_tab = self.state.selected_tab();
-            let tab_titles = tabs.iter().enumerate().map(|(index, title)| {
-                let style = if index == selected_tab {
-                    Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
-                } else {
-                    Style::from(NOP).add_modifier(Modifier::DIM)
-                };
-                Line::from(Span::styled(title.clone(), style))
-            });
-            let tabs_widget = Tabs::new(tab_titles)
-                .select(self.state.selected_tab())
-                .highlight_style(Style::default())
-                .divider(Span::styled("│", Style::from(NOP)));
-            tabs_widget.render(areas[row], buf);
-            row += 1;
-        }
         if let Some(filter) = &self.state.filter {
             let filter_line = Line::from(vec![
                 Span::raw(" "),

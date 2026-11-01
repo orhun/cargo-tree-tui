@@ -309,17 +309,10 @@ impl StatefulWidget for MetadataPopup<'_> {
             .borders(Borders::ALL)
             .border_style(Style::from(HEADER));
         let inner = block.inner(popup_area);
-        let tabs_area = Rect {
-            x: inner.x.saturating_add(1),
-            width: inner.width.saturating_sub(2),
-            height: 1,
-            ..inner
-        };
         let body_area = Rect {
             x: inner.x.saturating_add(1),
             width: inner.width.saturating_sub(2),
-            y: inner.y.saturating_add(1),
-            height: inner.height.saturating_sub(1),
+            ..inner
         };
         let content_area = Rect {
             width: body_area.width.saturating_sub(1),
@@ -330,14 +323,30 @@ impl StatefulWidget for MetadataPopup<'_> {
             width: 1,
             ..body_area
         };
-        let selected_style =
-            Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
-        Tabs::new(["Package", "Usage"])
+        let selected_style = Style::from(HEADER).add_modifier(Modifier::BOLD | Modifier::REVERSED);
+        block.render(popup_area, buf);
+        let tab_titles = [" Package ", " Usage "];
+        let tabs_width = (tab_titles
+            .iter()
+            .map(|title| Line::from(*title).width())
+            .sum::<usize>()
+            + tab_titles.len().saturating_sub(1)) as u16;
+        let tabs_x = popup_area
+            .right()
+            .saturating_sub(2)
+            .saturating_sub(tabs_width);
+        let tabs_area = Rect {
+            x: tabs_x,
+            y: popup_area.y,
+            width: tabs_width,
+            height: 1,
+        };
+        Tabs::new(tab_titles)
             .select(state.tab.index())
             .highlight_style(selected_style)
+            .padding("", "")
             .divider(Span::styled("│", Style::from(NOP)))
             .render(tabs_area, buf);
-        block.render(popup_area, buf);
         match state.tab {
             MetadataTab::Package => {
                 if state.graph_index.is_none() {
