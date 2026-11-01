@@ -420,6 +420,7 @@ impl MetadataPopup<'_> {
             .usage_tree
             .as_mut()
             .expect("usage tree was initialized");
+        usage_tree.state.ensure_visible_nodes(&usage_tree.tree);
         let selected = usage_tree.state.selected_node_id();
         let usage_index = selected
             .and_then(|id| usage_tree.usage_indices.get(id.0))
