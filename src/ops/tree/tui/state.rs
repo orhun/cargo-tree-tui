@@ -1,5 +1,8 @@
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, mpsc::Sender};
+use std::{
+    process::{Command, Stdio},
+    sync::{Arc, OnceLock, mpsc::Sender},
+};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
@@ -337,6 +340,12 @@ impl TuiState {
             (KeyCode::Char('m'), _) => {
                 self.show_metadata = !self.show_metadata;
             }
+            (KeyCode::Char('o'), _) => {
+                self.open_selected_dependency();
+            }
+            (KeyCode::Char('d'), _) => {
+                self.open_selected_docs_rs();
+            }
             (KeyCode::Char('M'), _) => {
                 self.open_format_selector();
             }
@@ -387,6 +396,44 @@ impl TuiState {
         if self.show_metadata && self.tree_widget_state.selected_node_id() != selected_before {
             self.metadata_popup.scroll = 0;
         }
+    }
+
+    fn open_selected_dependency(&self) {
+        let Some(dependency) =
+            Self::selected_dependency(&self.dependency_tree, &self.tree_widget_state)
+        else {
+            return;
+        };
+        let Some(package_id) = dependency.package_id else {
+            return;
+        };
+        let source_id = package_id.source_id();
+        if source_id.is_path() {
+            return;
+        }
+
+        let url = format!(
+            "https://crates.io/crates/{}/{}",
+            dependency.name, dependency.version
+        );
+        let _ = open_url(&url);
+    }
+
+    fn open_selected_docs_rs(&self) {
+        let Some(dependency) =
+            Self::selected_dependency(&self.dependency_tree, &self.tree_widget_state)
+        else {
+            return;
+        };
+        let Some(package_id) = dependency.package_id else {
+            return;
+        };
+        if package_id.source_id().is_path() {
+            return;
+        }
+
+        let url = format!("https://docs.rs/{}/{}", dependency.name, dependency.version);
+        let _ = open_url(&url);
     }
 
     fn handle_search_result(&mut self, search_result: SearchResult) {
@@ -1276,4 +1323,32 @@ fn set_edge_options(options: &mut ResolutionOptions, selected: [bool; 3], featur
                 })
             }),
     );
+}
+
+fn open_url(url: &str) -> std::io::Result<()> {
+    #[cfg(any(unix, target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let mut command = Command::new("open");
+        #[cfg(target_os = "windows")]
+        let mut command = Command::new("explorer.exe");
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let mut command = Command::new("xdg-open");
+
+        command
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        let _ = url;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "opening URLs is not supported on this platform",
+        ))
+    }
 }
