@@ -26,6 +26,15 @@ pub struct TreeFormat {
     requirements: PackageFormatRequirements,
 }
 
+#[derive(Default)]
+pub(super) struct FormatStyles {
+    pub name: Style,
+    pub license: Style,
+    pub feature: Style,
+    pub version: Style,
+    pub suffix: Style,
+}
+
 impl TreeFormat {
     pub fn parse(format: &str) -> Result<Self> {
         let mut chars = format.chars().peekable();
@@ -112,36 +121,32 @@ impl TreeFormat {
         self.requirements
     }
 
-    pub fn append_spans<'a>(
+    pub(super) fn append_spans<'a>(
         &'a self,
         dependency: &'a Dependency,
         spans: &mut Vec<Span<'a>>,
-        name_style: Style,
-        license_style: Style,
-        feature_style: Style,
-        version_style: Style,
-        suffix_style: Style,
+        styles: FormatStyles,
     ) {
         for chunk in &self.chunks {
             match chunk {
                 Chunk::Text(text) => {
-                    spans.push(Span::styled(text.as_str(), name_style));
+                    spans.push(Span::styled(text.as_str(), styles.name));
                 }
                 Chunk::Package => {
-                    spans.push(Span::styled(dependency.name.as_str(), name_style));
-                    spans.push(Span::styled(" v", version_style));
-                    spans.push(Span::styled(dependency.version.as_str(), version_style));
+                    spans.push(Span::styled(dependency.name.as_str(), styles.name));
+                    spans.push(Span::styled(" v", styles.version));
+                    spans.push(Span::styled(dependency.version.as_str(), styles.version));
                     if dependency.is_proc_macro {
-                        spans.push(Span::styled(" (proc-macro)", suffix_style));
+                        spans.push(Span::styled(" (proc-macro)", styles.suffix));
                     }
                     if let Some(source) = dependency
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.source.as_deref())
                     {
-                        spans.push(Span::styled(" (", suffix_style));
-                        spans.push(Span::styled(source, suffix_style));
-                        spans.push(Span::styled(")", suffix_style));
+                        spans.push(Span::styled(" (", styles.suffix));
+                        spans.push(Span::styled(source, styles.suffix));
+                        spans.push(Span::styled(")", styles.suffix));
                     }
                 }
                 Chunk::License => push_value(
@@ -150,7 +155,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.license.as_deref()),
-                    license_style,
+                    styles.license,
                 ),
                 Chunk::Repository => push_value(
                     spans,
@@ -158,7 +163,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.repository.as_deref()),
-                    name_style.add_modifier(Modifier::ITALIC),
+                    styles.name.add_modifier(Modifier::ITALIC),
                 ),
                 Chunk::Features => push_value(
                     spans,
@@ -166,7 +171,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.features.as_deref()),
-                    feature_style,
+                    styles.feature,
                 ),
                 Chunk::Library => push_value(
                     spans,
@@ -174,7 +179,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.library.as_deref()),
-                    name_style,
+                    styles.name,
                 ),
             }
         }
@@ -208,8 +213,6 @@ fn push_value<'a>(spans: &mut Vec<Span<'a>>, value: Option<&'a str>, style: Styl
 mod tests {
     use std::sync::Arc;
 
-    use ratatui::style::Style;
-
     use crate::core::{Dependency, PackageFormatMetadata};
 
     use super::TreeFormat;
@@ -228,15 +231,7 @@ mod tests {
 
     fn render(format: &TreeFormat, dependency: &Dependency) -> String {
         let mut spans = Vec::new();
-        format.append_spans(
-            dependency,
-            &mut spans,
-            Style::default(),
-            Style::default(),
-            Style::default(),
-            Style::default(),
-            Style::default(),
-        );
+        format.append_spans(dependency, &mut spans, super::FormatStyles::default());
         spans.iter().fold(String::new(), |mut output, span| {
             output.push_str(span.content.as_ref());
             output
