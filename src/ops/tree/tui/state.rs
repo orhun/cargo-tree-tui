@@ -269,9 +269,7 @@ impl TuiState {
                 }
                 _ => {}
             }
-            if self.metadata_popup.tab == super::metadata::MetadataTab::Package
-                && key_event.modifiers.contains(KeyModifiers::SHIFT)
-            {
+            if key_event.modifiers.contains(KeyModifiers::SHIFT) {
                 match key_event.code {
                     KeyCode::PageDown => {
                         self.metadata_popup.scroll = self
@@ -287,19 +285,18 @@ impl TuiState {
                             .saturating_sub(self.metadata_popup.page_size.max(1));
                         return;
                     }
-                    _ => {}
-                }
-            }
-            if self.metadata_popup.tab == super::metadata::MetadataTab::Usage
-                && key_event.modifiers.contains(KeyModifiers::SHIFT)
-            {
-                match key_event.code {
-                    KeyCode::Up => {
+                    KeyCode::Up
+                        if self.metadata_popup.tab == super::metadata::MetadataTab::Usage =>
+                    {
                         self.metadata_popup.move_usage_selection(false);
+                        self.metadata_popup.scroll = 0;
                         return;
                     }
-                    KeyCode::Down => {
+                    KeyCode::Down
+                        if self.metadata_popup.tab == super::metadata::MetadataTab::Usage =>
+                    {
                         self.metadata_popup.move_usage_selection(true);
+                        self.metadata_popup.scroll = 0;
                         return;
                     }
                     _ => {}

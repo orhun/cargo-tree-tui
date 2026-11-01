@@ -285,7 +285,7 @@ impl StatefulWidget for MetadataPopup<'_> {
     type State = MetadataPopupState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let width = area.width / 2;
+        let width = (area.width.saturating_mul(4) / 5).min(100);
         let height = area.height.saturating_sub(2).min(30);
         if width < 4 || height < 3 {
             return;
@@ -435,16 +435,18 @@ impl MetadataPopup<'_> {
         let declaration_height = declaration
             .as_ref()
             .map(|(section, text)| {
-                let content_width = details_column.width.saturating_sub(2).max(1) as usize;
-                2 + Line::from(text.as_str()).width().div_ceil(content_width)
-                    + Line::from(section.as_str()).width().div_ceil(content_width)
+                let content_width = details_column.width.saturating_sub(3).max(1) as usize;
+                2 + toml_wrapped_line_count(&Line::from(section.as_str()), content_width)
+                    + toml_wrapped_line_count(&Line::from(text.as_str()), content_width)
             })
             .unwrap_or(0)
-            .min(details_column.height.saturating_sub(1) as usize)
-            as u16;
-        let [details_area, declaration_area] =
-            Layout::vertical([Constraint::Min(1), Constraint::Length(declaration_height)])
-                .areas(details_column);
+            .min(details_column.height as usize) as u16;
+        let details_height = details_column.height.saturating_sub(declaration_height);
+        let [details_area, declaration_area] = Layout::vertical([
+            Constraint::Length(details_height),
+            Constraint::Length(declaration_height),
+        ])
+        .areas(details_column);
         let tree_widget_area = Rect {
             width: tree_area.width.saturating_sub(1),
             ..tree_area
@@ -545,12 +547,40 @@ impl MetadataPopup<'_> {
             let content_area = block.inner(declaration_area);
             block.render(declaration_area, buf);
             let lines = Text::from(vec![Line::from(declaration.0), Line::from(declaration.1)]);
+            let paragraph_area = Rect {
+                width: content_area.width.saturating_sub(1),
+                ..content_area
+            };
+            let content_height = lines
+                .lines
+                .iter()
+                .map(|line| toml_wrapped_line_count(line, paragraph_area.width.max(1) as usize))
+                .sum::<usize>();
+            let max_scroll = content_height.saturating_sub(paragraph_area.height as usize);
+            state.scroll = state.scroll.min(max_scroll);
+            state.page_size = paragraph_area.height as usize;
             Paragraph::new(lines)
                 .style(Style::from(NOP))
                 .wrap(Wrap { trim: false })
-                .render(content_area, buf);
+                .scroll((state.scroll.min(u16::MAX as usize) as u16, 0))
+                .render(paragraph_area, buf);
+            if max_scroll > 0 {
+                let mut scrollbar_state = ScrollbarState::new(max_scroll)
+                    .position(state.scroll)
+                    .viewport_content_length(paragraph_area.height as usize);
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .track_symbol(Some("┆"))
+                    .thumb_symbol("▐")
+                    .render(content_area, buf, &mut scrollbar_state);
+            }
         }
     }
+}
+
+fn toml_wrapped_line_count(line: &Line<'_>, width: usize) -> usize {
+    let width = width.max(1);
+    let line_width = line.width();
+    line_width.max(1).div_ceil(width) + usize::from(line_width > width)
 }
 
 fn push_compact_field<'a>(
