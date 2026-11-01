@@ -1,6 +1,7 @@
+use clap_cargo::style::{DEP_BUILD, DEP_FEATURE};
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Block,
 };
@@ -227,12 +228,24 @@ impl<'a, 's> RenderContext<'a, 's> {
             TreePrefix::Indent | TreePrefix::None => {}
         }
 
+        let is_search_match = self.state.is_search_match(node_id);
         let name_style = if lineage.is_selected {
             self.style.highlight_style
-        } else if self.state.is_search_match(node_id) {
+        } else if is_search_match {
             self.style.filtered_style
         } else {
             self.style.name_style
+        };
+        let license_style = if lineage.is_selected || is_search_match {
+            name_style
+        } else {
+            DEP_BUILD.into()
+        }
+        .remove_modifier(Modifier::BOLD);
+        let feature_style = if lineage.is_selected || is_search_match {
+            name_style
+        } else {
+            DEP_FEATURE.into()
         };
 
         match node_data {
@@ -242,6 +255,8 @@ impl<'a, 's> RenderContext<'a, 's> {
                         dependency,
                         &mut spans,
                         name_style,
+                        license_style,
+                        feature_style,
                         self.style.version_style,
                         self.style.suffix_style,
                     );

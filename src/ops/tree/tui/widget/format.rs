@@ -1,11 +1,14 @@
 use std::iter::Peekable;
 
 use anyhow::{Result, bail};
-use ratatui::{style::Style, text::Span};
+use ratatui::{
+    style::{Modifier, Style},
+    text::Span,
+};
 
 use crate::core::{Dependency, PackageFormatRequirements};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Chunk {
     Text(String),
     Package,
@@ -16,8 +19,9 @@ enum Chunk {
 }
 
 /// Parsed Cargo-style package display format.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TreeFormat {
+    raw: String,
     chunks: Vec<Chunk>,
     requirements: PackageFormatRequirements,
 }
@@ -73,9 +77,34 @@ impl TreeFormat {
         };
 
         Ok(Self {
+            raw: format.to_owned(),
             chunks,
             requirements,
         })
+    }
+
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    pub fn fields(&self) -> [bool; 5] {
+        [
+            self.chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Chunk::Package)),
+            self.chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Chunk::License)),
+            self.chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Chunk::Repository)),
+            self.chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Chunk::Features)),
+            self.chunks
+                .iter()
+                .any(|chunk| matches!(chunk, Chunk::Library)),
+        ]
     }
 
     pub fn requirements(&self) -> PackageFormatRequirements {
@@ -87,6 +116,8 @@ impl TreeFormat {
         dependency: &'a Dependency,
         spans: &mut Vec<Span<'a>>,
         name_style: Style,
+        license_style: Style,
+        feature_style: Style,
         version_style: Style,
         suffix_style: Style,
     ) {
@@ -118,7 +149,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.license.as_deref()),
-                    name_style,
+                    license_style,
                 ),
                 Chunk::Repository => push_value(
                     spans,
@@ -126,7 +157,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.repository.as_deref()),
-                    name_style,
+                    name_style.add_modifier(Modifier::ITALIC),
                 ),
                 Chunk::Features => push_value(
                     spans,
@@ -134,7 +165,7 @@ impl TreeFormat {
                         .format_metadata
                         .as_ref()
                         .and_then(|metadata| metadata.features.as_deref()),
-                    name_style,
+                    feature_style,
                 ),
                 Chunk::Library => push_value(
                     spans,
@@ -199,6 +230,8 @@ mod tests {
         format.append_spans(
             dependency,
             &mut spans,
+            Style::default(),
+            Style::default(),
             Style::default(),
             Style::default(),
             Style::default(),

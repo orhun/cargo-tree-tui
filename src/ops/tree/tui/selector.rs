@@ -50,6 +50,8 @@ pub struct SelectorState {
     pub applying: bool,
     pub message: Option<String>,
     pub filter: Option<String>,
+    pub editor: Option<String>,
+    editor_cursor: usize,
     tabs: Option<Vec<String>>,
     selected_tab: usize,
     max_height: usize,
@@ -66,6 +68,8 @@ impl SelectorState {
             applying: false,
             message: None,
             filter: None,
+            editor: None,
+            editor_cursor: 0,
             tabs: None,
             selected_tab: 0,
             max_height: 14,
@@ -76,6 +80,92 @@ impl SelectorState {
     pub fn filterable(mut self) -> Self {
         self.filter = Some(String::new());
         self
+    }
+
+    pub fn editor(mut self, value: impl Into<String>) -> Self {
+        let value = value.into();
+        self.editor_cursor = value.chars().count();
+        self.editor = Some(value);
+        self
+    }
+
+    pub fn editor_cursor(&self) -> usize {
+        self.editor_cursor
+    }
+
+    pub fn set_editor(&mut self, value: String) {
+        self.editor_cursor = value.chars().count();
+        self.editor = Some(value);
+    }
+
+    pub fn insert_editor_char(&mut self, ch: char) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        let byte_index = editor
+            .char_indices()
+            .nth(self.editor_cursor)
+            .map_or(editor.len(), |(index, _)| index);
+        editor.insert(byte_index, ch);
+        self.editor_cursor += 1;
+    }
+
+    pub fn backspace_editor(&mut self) {
+        if self.editor_cursor == 0 {
+            return;
+        }
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        let byte_start = editor
+            .char_indices()
+            .nth(self.editor_cursor - 1)
+            .map(|(index, _)| index);
+        let byte_end = editor
+            .char_indices()
+            .nth(self.editor_cursor)
+            .map_or(editor.len(), |(index, _)| index);
+        if let Some(byte_start) = byte_start {
+            editor.replace_range(byte_start..byte_end, "");
+            self.editor_cursor -= 1;
+        }
+    }
+
+    pub fn delete_editor_char(&mut self) {
+        let Some(editor) = &mut self.editor else {
+            return;
+        };
+        let Some((byte_start, _)) = editor.char_indices().nth(self.editor_cursor) else {
+            return;
+        };
+        let byte_end = editor
+            .char_indices()
+            .nth(self.editor_cursor + 1)
+            .map_or(editor.len(), |(index, _)| index);
+        editor.replace_range(byte_start..byte_end, "");
+    }
+
+    pub fn move_editor_cursor_left(&mut self) {
+        self.editor_cursor = self.editor_cursor.saturating_sub(1);
+    }
+
+    pub fn move_editor_cursor_right(&mut self) {
+        let char_count = self
+            .editor
+            .as_ref()
+            .map_or(0, |value| value.chars().count());
+        self.editor_cursor = self.editor_cursor.saturating_add(1).min(char_count);
+    }
+
+    pub fn move_editor_cursor_start(&mut self) {
+        self.editor_cursor = 0;
+    }
+
+    pub fn move_editor_cursor_end(&mut self) {
+        self.editor_cursor = self
+            .editor
+            .as_ref()
+            .map_or(0, |value| value.chars().count());
     }
 
     pub fn max_height(mut self, max_height: usize) -> Self {
@@ -219,11 +309,16 @@ impl<'a> SelectorPopup<'a> {
         let filter_width = self.state.filter.as_ref().map_or(0, |filter| {
             "Filter: ".chars().count() + filter.chars().count() + 2
         });
+        let editor_width = self.state.editor.as_ref().map_or(0, |editor| {
+            Line::from(" Format: ").width() + Line::from(editor.as_str()).width() + 2
+        });
         let tabs_width = self.state.tab_titles().map_or(0, |tabs| {
             tabs.iter().map(|tab| tab.chars().count()).sum::<usize>() + tabs.len().saturating_sub(1)
         });
         let footer_width = if self.state.applying {
             "Resolving dependency graph...".len()
+        } else if self.state.editor.is_some() {
+            "Type edit format   Backspace erase   Space toggle   Enter apply   Esc cancel".len()
         } else if self.state.filter.is_some() {
             if self.state.has_tabs() {
                 "Tab switch   Type filter   Backspace erase   Space toggle   Enter apply   Esc cancel"
@@ -241,6 +336,7 @@ impl<'a> SelectorPopup<'a> {
         .saturating_add(2);
         let width = options_width
             .max(filter_width)
+            .max(editor_width)
             .max(tabs_width)
             .max(message_width)
             .max(footer_width)
@@ -252,6 +348,7 @@ impl<'a> SelectorPopup<'a> {
             .len()
             .saturating_add(5)
             .saturating_add(usize::from(self.state.filter.is_some()))
+            .saturating_add(usize::from(self.state.editor.is_some()))
             .saturating_add(usize::from(self.state.has_tabs()))
             .saturating_add(usize::from(self.state.message.is_some()))
             .min(self.state.max_height)
@@ -259,8 +356,23 @@ impl<'a> SelectorPopup<'a> {
         Size::new(width as u16, height as u16)
     }
 
+    fn editor_cursor_column(&self) -> u16 {
+        let Some(editor) = &self.state.editor else {
+            return 0;
+        };
+        let before_cursor = editor
+            .chars()
+            .take(self.state.editor_cursor())
+            .collect::<String>();
+        Line::from(before_cursor).width().min(usize::from(u16::MAX)) as u16
+    }
+
+    fn editor_scroll_offset(&self, viewport_width: u16) -> u16 {
+        self.editor_cursor_column()
+            .saturating_sub(viewport_width.saturating_sub(1))
+    }
+
     pub fn cursor_position(&self, area: Rect) -> Option<Position> {
-        let filter = self.state.filter.as_ref()?;
         if self.state.applying {
             return None;
         }
@@ -272,18 +384,33 @@ impl<'a> SelectorPopup<'a> {
             width: size.width,
             height: size.height,
         };
+        if self.state.editor.is_some() {
+            let editor_area_width = popup_area.width.saturating_sub(11);
+            let cursor_column = self
+                .editor_cursor_column()
+                .saturating_sub(self.editor_scroll_offset(editor_area_width));
+            let x = popup_area
+                .x
+                .saturating_add(10)
+                .saturating_add(cursor_column)
+                .min(popup_area.right().saturating_sub(2));
+            let y = popup_area.y.saturating_add(
+                1 + u16::from(self.state.has_tabs()) + u16::from(self.state.filter.is_some()),
+            );
+            return Some(Position::new(x, y));
+        }
+
+        let filter = self.state.filter.as_ref()?;
         let x = popup_area
             .x
             .saturating_add(2)
             .saturating_add(Line::from("Filter: ").width() as u16)
             .saturating_add(Line::from(filter.as_str()).width() as u16)
             .min(popup_area.right().saturating_sub(2));
-        Some(Position::new(
-            x,
-            popup_area
-                .y
-                .saturating_add(1 + u16::from(self.state.has_tabs())),
-        ))
+        let y = popup_area
+            .y
+            .saturating_add(1 + u16::from(self.state.has_tabs()));
+        Some(Position::new(x, y))
     }
 }
 
@@ -342,6 +469,9 @@ impl Widget for SelectorPopup<'_> {
         if self.state.filter.is_some() {
             constraints.push(Constraint::Length(1));
         }
+        if self.state.editor.is_some() {
+            constraints.push(Constraint::Length(1));
+        }
         constraints.extend([
             Constraint::Length(1),
             Constraint::Min(0),
@@ -378,6 +508,20 @@ impl Widget for SelectorPopup<'_> {
                 .render(areas[row], buf);
             row += 1;
         }
+        if let Some(editor) = &self.state.editor {
+            let editor_areas =
+                Layout::horizontal([Constraint::Length(9), Constraint::Min(0)]).split(areas[row]);
+            Paragraph::new(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Format: ", Style::from(VALID)),
+            ]))
+            .render(editor_areas[0], buf);
+            Paragraph::new(editor.as_str())
+                .scroll((0, self.editor_scroll_offset(editor_areas[1].width)))
+                .style(selected_style)
+                .render(editor_areas[1], buf);
+            row += 1;
+        }
         let list_area = areas[row + 1];
         let footer_area = areas[row + 3];
         StatefulWidget::render(list, list_area, buf, &mut list_state);
@@ -410,6 +554,21 @@ impl Widget for SelectorPopup<'_> {
         }
         let footer = if self.state.applying {
             Line::from("Resolving dependency graph...")
+        } else if self.state.editor.is_some() {
+            let key_style = Style::from(VALID);
+            Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Type", key_style),
+                Span::raw(" edit format   "),
+                Span::styled("Backspace", key_style),
+                Span::raw(" erase   "),
+                Span::styled("Space", key_style),
+                Span::raw(" toggle   "),
+                Span::styled("Enter", key_style),
+                Span::raw(" apply   "),
+                Span::styled("Esc", key_style),
+                Span::raw(" cancel "),
+            ])
         } else if self.state.has_tabs() && self.state.filter.is_some() {
             let key_style = Style::from(VALID);
             Line::from(vec![
