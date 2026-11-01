@@ -59,6 +59,7 @@ pub fn build_tree(nodes: &[TestNode]) -> DependencyTree {
     DependencyTree {
         workspace_name: "workspace".into(),
         parents,
+        dependency_usages: Default::default(),
         nodes: arena,
         roots,
     }

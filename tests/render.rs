@@ -681,6 +681,7 @@ fn large_dag_no_oom() {
     let tree = DependencyTree {
         workspace_name: "dag-test".into(),
         parents,
+        dependency_usages: Default::default(),
         nodes: arena,
         roots: vec![NodeId(0)],
     };

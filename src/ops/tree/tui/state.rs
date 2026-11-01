@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, mpsc::Sender};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use super::TuiTree;
 use super::selector::{SelectorOption, SelectorState};
@@ -10,6 +10,7 @@ use crate::core::dependency::{
 };
 use crate::core::{Dependency, PackageFormatRequirements, ResolutionOptions};
 
+use super::metadata::MetadataPopupState;
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,7 +95,7 @@ pub struct TuiState {
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
     pub show_metadata: bool,
-    pub metadata_scroll: usize,
+    pub metadata_popup: MetadataPopupState,
     pub input_mode: InputMode,
     pub search_query: String,
     pub search_running: bool,
@@ -142,7 +143,7 @@ impl TuiState {
             tree_widget_state,
             show_help: false,
             show_metadata: false,
-            metadata_scroll: 0,
+            metadata_popup: MetadataPopupState::default(),
             input_mode: InputMode::Normal,
             search_query: String::new(),
             search_running: false,
@@ -254,14 +255,53 @@ impl TuiState {
         if self.show_metadata {
             match key_event.code {
                 KeyCode::Tab => {
-                    self.metadata_scroll = self.metadata_scroll.saturating_add(1);
+                    self.metadata_popup.tab.next();
+                    self.metadata_popup.scroll = 0;
                     return;
                 }
                 KeyCode::BackTab => {
-                    self.metadata_scroll = self.metadata_scroll.saturating_sub(1);
+                    self.metadata_popup.tab.previous();
+                    self.metadata_popup.scroll = 0;
+                    return;
+                }
+                KeyCode::PageDown => {
+                    if self.metadata_popup.tab == super::metadata::MetadataTab::Usage {
+                        return;
+                    } else {
+                        self.metadata_popup.scroll = self
+                            .metadata_popup
+                            .scroll
+                            .saturating_add(self.metadata_popup.page_size.max(1));
+                    }
+                    return;
+                }
+                KeyCode::PageUp => {
+                    if self.metadata_popup.tab == super::metadata::MetadataTab::Usage {
+                        return;
+                    } else {
+                        self.metadata_popup.scroll = self
+                            .metadata_popup
+                            .scroll
+                            .saturating_sub(self.metadata_popup.page_size.max(1));
+                    }
                     return;
                 }
                 _ => {}
+            }
+            if self.metadata_popup.tab == super::metadata::MetadataTab::Usage
+                && key_event.modifiers.contains(KeyModifiers::SHIFT)
+            {
+                match key_event.code {
+                    KeyCode::Up => {
+                        self.metadata_popup.move_usage_selection(false);
+                        return;
+                    }
+                    KeyCode::Down => {
+                        self.metadata_popup.move_usage_selection(true);
+                        return;
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -345,7 +385,7 @@ impl TuiState {
             _ => {}
         }
         if self.show_metadata && self.tree_widget_state.selected_node_id() != selected_before {
-            self.metadata_scroll = 0;
+            self.metadata_popup.scroll = 0;
         }
     }
 
@@ -359,7 +399,7 @@ impl TuiState {
         self.search_running = false;
         self.tree_widget_state
             .apply_search_state(&self.dependency_tree, search_result.search_state);
-        self.metadata_scroll = 0;
+        self.metadata_popup.scroll = 0;
     }
 
     fn open_edge_selector(&mut self) {
@@ -893,7 +933,8 @@ impl TuiState {
                 self.tree_options = result.options;
                 self.dependency_tree = dependency_tree;
                 self.tree_widget_state = TreeWidgetState::default();
-                self.metadata_scroll = 0;
+                self.metadata_popup.scroll = 0;
+                self.metadata_popup.invalidate_usage_tree();
                 if let Some(depth) = self.tree_options.resolution.depth {
                     self.tree_widget_state
                         .open_to_dependency_depth(&self.dependency_tree, depth);

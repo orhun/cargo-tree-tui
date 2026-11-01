@@ -25,11 +25,23 @@ use widget::TreeWidget;
 pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
     draw_tree(frame, frame.area(), state);
     if state.show_metadata {
-        draw_metadata_popup(
-            frame,
+        let dependency =
+            TuiState::selected_dependency(&state.dependency_tree, &state.tree_widget_state);
+        let usages = dependency
+            .and_then(|dependency| dependency.package_id)
+            .and_then(|package_id| state.dependency_tree.dependency_usages.get(&package_id))
+            .map(Vec::as_slice);
+        frame.render_stateful_widget(
+            MetadataPopup::new(
+                dependency,
+                usages,
+                &state.dependency_tree,
+                state.prefix,
+                state.charset,
+                &state.format,
+            ),
             frame.area(),
-            TuiState::selected_dependency(&state.dependency_tree, &state.tree_widget_state),
-            &mut state.metadata_scroll,
+            &mut state.metadata_popup,
         );
     }
     draw_help_text(frame, frame.area());
@@ -39,15 +51,6 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
     if let Some(selector) = &state.selector {
         draw_selector_popup(frame, frame.area(), selector);
     }
-}
-
-fn draw_metadata_popup(
-    frame: &mut Frame,
-    area: Rect,
-    dependency: Option<&crate::core::Dependency>,
-    scroll: &mut usize,
-) {
-    frame.render_stateful_widget(MetadataPopup::new(dependency), area, scroll);
 }
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
