@@ -7,7 +7,7 @@ pub mod widget;
 
 pub use tree::TuiTree;
 
-use clap_cargo::style::{HEADER, USAGE};
+use clap_cargo::style::{HEADER, USAGE, VALID};
 use ratatui::{
     Frame,
     layout::{Position, Rect},
@@ -59,9 +59,17 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
         state.input_mode,
         InputMode::Search | InputMode::SearchResults
     ) {
-        Some((state.search_query.as_str(), state.search_prompt_symbol()))
+        Some((
+            state.search_query.as_str(),
+            Span::raw(format!("{} ", state.search_prompt_symbol())).bold(),
+        ))
     } else {
-        state.invert_prompt.as_deref().map(|prompt| (prompt, '!'))
+        state.invert_prompt.as_deref().map(|prompt| {
+            (
+                prompt,
+                Span::styled("invert: ", Style::from(VALID).add_modifier(Modifier::BOLD)),
+            )
+        })
     };
 
     let tree_widget = TreeWidget::new(&state.dependency_tree)

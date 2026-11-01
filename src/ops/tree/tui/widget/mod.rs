@@ -1,7 +1,6 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::Stylize,
     text::{Line, Span},
     widgets::{Block, Paragraph, Scrollbar, ScrollbarState, StatefulWidget, Widget},
 };
@@ -32,7 +31,7 @@ pub struct TreeWidget<'a> {
     tree: &'a TuiTree,
     block: Option<Block<'a>>,
     scrollbar: Option<Scrollbar<'a>>,
-    prompt: Option<(&'a str, char)>,
+    prompt: Option<(&'a str, Span<'a>)>,
     format: Option<&'a TreeFormat>,
     style: TreeWidgetStyle,
     prefix: TreePrefix,
@@ -61,7 +60,7 @@ impl<'a> TreeWidget<'a> {
         self
     }
 
-    pub fn prompt(mut self, prompt: Option<(&'a str, char)>) -> Self {
+    pub fn prompt(mut self, prompt: Option<(&'a str, Span<'a>)>) -> Self {
         self.prompt = prompt;
         self
     }
@@ -162,12 +161,9 @@ impl StatefulWidget for TreeWidget<'_> {
         }
 
         if let Some(area) = prompt_area
-            && let Some((prompt_text, prompt_symbol)) = self.prompt
+            && let Some((prompt_text, prompt_label)) = self.prompt
         {
-            let search_text = Line::from(vec![
-                Span::raw(prompt_symbol.to_string()).bold(),
-                Span::raw(prompt_text),
-            ]);
+            let search_text = Line::from(vec![prompt_label, Span::raw(prompt_text)]);
             Paragraph::new(search_text)
                 .style(self.style.style)
                 .render(area, buf);
