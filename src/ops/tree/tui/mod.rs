@@ -1,4 +1,5 @@
 pub mod help;
+pub mod metadata;
 pub mod selector;
 pub mod state;
 pub(crate) mod tree;
@@ -16,12 +17,21 @@ use ratatui::{
 };
 
 use help::HelpPopup;
+use metadata::MetadataPopup;
 use selector::{SelectorPopup, SelectorState};
 use state::{InputMode, TuiState};
 use widget::TreeWidget;
 
 pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
     draw_tree(frame, frame.area(), state);
+    if state.show_metadata {
+        draw_metadata_popup(
+            frame,
+            frame.area(),
+            TuiState::selected_dependency(&state.dependency_tree, &state.tree_widget_state),
+            &mut state.metadata_scroll,
+        );
+    }
     draw_help_text(frame, frame.area());
     if state.show_help {
         draw_help_popup(frame);
@@ -29,6 +39,15 @@ pub fn draw_tui(frame: &mut Frame, state: &mut TuiState) {
     if let Some(selector) = &state.selector {
         draw_selector_popup(frame, frame.area(), selector);
     }
+}
+
+fn draw_metadata_popup(
+    frame: &mut Frame,
+    area: Rect,
+    dependency: Option<&crate::core::Dependency>,
+    scroll: &mut usize,
+) {
+    frame.render_stateful_widget(MetadataPopup::new(dependency), area, scroll);
 }
 
 pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {

@@ -71,7 +71,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
         cargo_tree_tui::core::DependencyTree::load_with_options_and_format(
             tree_options.manifest_path.clone(),
             &tree_options.resolution,
-            format.requirements(),
+            format.requirements().with_metadata(),
         )?,
         tree_options.no_dedupe,
     ));

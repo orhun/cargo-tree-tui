@@ -8,7 +8,7 @@ use super::selector::{SelectorOption, SelectorState};
 use crate::core::dependency::{
     DependencyNode, DependencyType, workspace_features, workspace_packages,
 };
-use crate::core::{PackageFormatRequirements, ResolutionOptions};
+use crate::core::{Dependency, PackageFormatRequirements, ResolutionOptions};
 
 use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
 
@@ -93,6 +93,8 @@ pub struct TuiState {
     pending_format: Option<TreeFormat>,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
+    pub show_metadata: bool,
+    pub metadata_scroll: usize,
     pub input_mode: InputMode,
     pub search_query: String,
     pub search_running: bool,
@@ -139,6 +141,8 @@ impl TuiState {
             pending_format: None,
             tree_widget_state,
             show_help: false,
+            show_metadata: false,
+            metadata_scroll: 0,
             input_mode: InputMode::Normal,
             search_query: String::new(),
             search_running: false,
@@ -191,6 +195,20 @@ impl TuiState {
         }
     }
 
+    pub fn selected_dependency<'a>(
+        tree: &'a TuiTree,
+        tree_widget_state: &TreeWidgetState,
+    ) -> Option<&'a Dependency> {
+        let mut node_id = tree_widget_state.selected_node_id()?;
+        loop {
+            let node = tree.node(node_id)?;
+            if let Some(dependency) = node.as_dependency() {
+                return Some(dependency);
+            }
+            node_id = *tree.parents.get(node_id.0)?.first()?;
+        }
+    }
+
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         if self.show_help {
             // Close help popup on any key press
@@ -233,6 +251,21 @@ impl TuiState {
             return;
         }
 
+        if self.show_metadata {
+            match key_event.code {
+                KeyCode::Tab => {
+                    self.metadata_scroll = self.metadata_scroll.saturating_add(1);
+                    return;
+                }
+                KeyCode::BackTab => {
+                    self.metadata_scroll = self.metadata_scroll.saturating_sub(1);
+                    return;
+                }
+                _ => {}
+            }
+        }
+
+        let selected_before = self.tree_widget_state.selected_node_id();
         match (key_event.code, key_event.modifiers) {
             (KeyCode::Esc, _) if self.input_mode == InputMode::SearchResults => {
                 self.clear_search();
@@ -262,6 +295,9 @@ impl TuiState {
                 self.open_package_selector();
             }
             (KeyCode::Char('m'), _) => {
+                self.show_metadata = !self.show_metadata;
+            }
+            (KeyCode::Char('M'), _) => {
                 self.open_format_selector();
             }
             (KeyCode::Char('c'), _) => {
@@ -308,6 +344,9 @@ impl TuiState {
             }
             _ => {}
         }
+        if self.show_metadata && self.tree_widget_state.selected_node_id() != selected_before {
+            self.metadata_scroll = 0;
+        }
     }
 
     fn handle_search_result(&mut self, search_result: SearchResult) {
@@ -320,6 +359,7 @@ impl TuiState {
         self.search_running = false;
         self.tree_widget_state
             .apply_search_state(&self.dependency_tree, search_result.search_state);
+        self.metadata_scroll = 0;
     }
 
     fn open_edge_selector(&mut self) {
@@ -611,7 +651,10 @@ impl TuiState {
             return;
         }
 
-        if format_requirements_cover(self.format.requirements(), format.requirements()) {
+        if format_requirements_cover(
+            self.format.requirements().with_metadata(),
+            format.requirements(),
+        ) {
             self.pending_format = None;
             self.format = format;
             self.selector = None;
@@ -625,7 +668,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: format.requirements(),
+            format_requirements: format.requirements().with_metadata(),
             options,
         };
         if self.resolution_tx.send(request).is_ok() {
@@ -668,7 +711,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: self.format.requirements(),
+            format_requirements: self.format.requirements().with_metadata(),
             options,
         };
 
@@ -714,7 +757,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: self.format.requirements(),
+            format_requirements: self.format.requirements().with_metadata(),
             options,
         };
 
@@ -766,7 +809,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: self.format.requirements(),
+            format_requirements: self.format.requirements().with_metadata(),
             options,
         };
 
@@ -819,7 +862,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: self.format.requirements(),
+            format_requirements: self.format.requirements().with_metadata(),
             options,
         };
 
@@ -850,6 +893,7 @@ impl TuiState {
                 self.tree_options = result.options;
                 self.dependency_tree = dependency_tree;
                 self.tree_widget_state = TreeWidgetState::default();
+                self.metadata_scroll = 0;
                 if let Some(depth) = self.tree_options.resolution.depth {
                     self.tree_widget_state
                         .open_to_dependency_depth(&self.dependency_tree, depth);
@@ -947,7 +991,7 @@ impl TuiState {
         self.resolution_generation = self.resolution_generation.wrapping_add(1);
         let request = TreeResolutionRequest {
             generation: self.resolution_generation,
-            format_requirements: self.format.requirements(),
+            format_requirements: self.format.requirements().with_metadata(),
             options,
         };
         if self.resolution_tx.send(request).is_ok() {
@@ -1013,7 +1057,8 @@ fn format_requirements_cover(
     loaded: PackageFormatRequirements,
     requested: PackageFormatRequirements,
 ) -> bool {
-    (!requested.license || loaded.license)
+    (!requested.metadata || loaded.metadata)
+        && (!requested.license || loaded.license)
         && (!requested.repository || loaded.repository)
         && (!requested.features || loaded.features)
         && (!requested.library || loaded.library)
