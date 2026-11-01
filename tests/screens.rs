@@ -118,8 +118,14 @@ fn render(state: &mut TuiState) -> String {
 fn render_at(state: &mut TuiState, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| draw_tui(frame, state)).unwrap();
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let canonical_manifest_dir = manifest_dir.canonicalize().unwrap();
     buffer_as_ansi(terminal.backend().buffer())
-        .replace(env!("CARGO_MANIFEST_DIR"), "$CARGO_MANIFEST_DIR")
+        .replace(manifest_dir.to_str().unwrap(), "$CARGO_MANIFEST_DIR")
+        .replace(
+            canonical_manifest_dir.to_str().unwrap(),
+            "$CARGO_MANIFEST_DIR",
+        )
 }
 
 fn buffer_as_ansi(buffer: &ratatui::buffer::Buffer) -> String {
