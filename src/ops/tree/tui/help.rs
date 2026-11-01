@@ -16,6 +16,8 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
     ("f", "Select features"),
     ("p", "Select packages"),
     ("m", "Toggle dependency metadata"),
+    ("o", "Open crates.io page"),
+    ("d", "Open docs.rs page"),
     ("M", "Edit package format"),
     ("c", "Toggle tree charset"),
     ("←", "Collapse selected"),
