@@ -64,10 +64,12 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
             Span::raw(state.search_query.as_str()),
         ]))
     } else {
-        state
-            .invert_prompt
-            .as_deref()
-            .map(|prompt| Line::from(vec!["invert: ".green().bold(), Span::raw(prompt)]))
+        state.invert_prompt.as_deref().map(|prompt| {
+            Line::from(vec![
+                Span::styled("invert: ", Style::from(cargo::util::style::VALID)),
+                Span::raw(prompt),
+            ])
+        })
     };
 
     let tree_widget = TreeWidget::new(&state.dependency_tree)
