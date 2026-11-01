@@ -74,6 +74,7 @@ impl TreeFormat {
             features: chunks.iter().any(|chunk| matches!(chunk, Chunk::Features)),
             library: chunks.iter().any(|chunk| matches!(chunk, Chunk::Library)),
             source: chunks.iter().any(|chunk| matches!(chunk, Chunk::Package)),
+            metadata: false,
         };
 
         Ok(Self {
@@ -272,6 +273,7 @@ mod tests {
             features: Some("default,serde".to_owned()),
             library: Some("demo_lib".to_owned()),
             source: Some("git+https://example.com/demo".to_owned()),
+            ..PackageFormatMetadata::default()
         }));
         dependency.is_proc_macro = true;
 
