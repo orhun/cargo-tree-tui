@@ -20,6 +20,7 @@ use crate::cli::TreeArgs;
 
 /// Entry point for the `cargo tree-tui` command.
 pub fn run(args: TreeArgs) -> Result<()> {
+    let inline = args.inline;
     let no_dedupe = args.no_dedupe || args.all;
     let (depth, workspace_depth) = match args.depth {
         Some(crate::cli::Depth::Number(depth)) => (Some(depth), false),
@@ -100,7 +101,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
         format,
         tree_options,
     );
-    let mut terminal = Some(ratatui::init());
+    let mut terminal = Some(init_terminal(inline)?);
 
     while state.running {
         if let Some(terminal) = &mut terminal {
@@ -111,7 +112,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
             let resolution_finished = matches!(&event, Event::TreeResolved(_));
             state.handle_event(event);
             if resolution_finished && terminal.is_none() {
-                terminal = Some(ratatui::init());
+                terminal = Some(init_terminal(inline)?);
             }
         }
 
@@ -120,7 +121,7 @@ pub fn run(args: TreeArgs) -> Result<()> {
                 let resolution_finished = matches!(&event, Event::TreeResolved(_));
                 state.handle_event(event);
                 if resolution_finished {
-                    terminal = Some(ratatui::init());
+                    terminal = Some(init_terminal(inline)?);
                 }
             }
             continue;
@@ -145,6 +146,17 @@ pub fn run(args: TreeArgs) -> Result<()> {
     let _ = worker_handle.join();
     drop(resolution_handle);
     Ok(())
+}
+
+fn init_terminal(inline: bool) -> Result<ratatui::DefaultTerminal> {
+    if inline {
+        let (_, height) = crossterm::terminal::size()?;
+        Ok(ratatui::try_init_with_options(ratatui::TerminalOptions {
+            viewport: ratatui::Viewport::Inline(height),
+        })?)
+    } else {
+        Ok(ratatui::try_init()?)
+    }
 }
 
 fn resolve_prefix(
