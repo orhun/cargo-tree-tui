@@ -74,11 +74,13 @@ impl<'a, 's> RenderContext<'a, 's> {
         let selected_vpos = self.state.selected_virtual_pos();
         let prev_offset = self.state.viewport.offset;
         let selected_vline = selected_vpos.map(|vp| vp.0).unwrap_or(0);
+        let sibling_alignment = self.state.take_sibling_scroll_alignment();
         let mut viewport = Viewport::new(area, self.block).scroll_into_view(
             selected_vline,
             total_lines,
             1,
             prev_offset,
+            sibling_alignment,
         );
         self.state.update_viewport(viewport);
 
