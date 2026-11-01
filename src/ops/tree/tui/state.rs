@@ -336,7 +336,7 @@ impl TuiState {
             (KeyCode::Char('p'), _) => {
                 self.open_package_selector();
             }
-            (KeyCode::Char('m'), _) => {
+            (KeyCode::Char('m') | KeyCode::Enter, _) => {
                 self.show_metadata = !self.show_metadata;
             }
             (KeyCode::Char('o'), _) => {
