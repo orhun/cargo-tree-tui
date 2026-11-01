@@ -264,6 +264,12 @@ impl TuiState {
             (KeyCode::Char('m'), _) => {
                 self.open_format_selector();
             }
+            (KeyCode::Char('c'), _) => {
+                self.charset = match self.charset {
+                    TreeCharset::Utf8 => TreeCharset::Ascii,
+                    TreeCharset::Ascii => TreeCharset::Utf8,
+                };
+            }
             (KeyCode::Char('i'), _) => {
                 self.invert_selected_package();
             }
