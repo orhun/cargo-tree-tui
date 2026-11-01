@@ -1,5 +1,7 @@
 # cargo-tree-tui
 
+![](assets/cargo-tree-tui.gif)
+
 ## installation
 
 ```bash
