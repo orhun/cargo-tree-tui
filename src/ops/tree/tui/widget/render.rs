@@ -10,7 +10,7 @@ use crate::core::{Dependency, DependencyNode};
 use crate::ops::tree::tui::TuiTree;
 
 use super::{
-    format::TreeFormat,
+    format::{FormatStyles, TreeFormat},
     lineage::Lineage,
     state::{TreeWidgetState, VisIdx, VisibleNode},
     style::{TreePrefix, TreeWidgetStyle},
@@ -254,11 +254,13 @@ impl<'a, 's> RenderContext<'a, 's> {
                     format.append_spans(
                         dependency,
                         &mut spans,
-                        name_style,
-                        license_style,
-                        feature_style,
-                        self.style.version_style,
-                        self.style.suffix_style,
+                        FormatStyles {
+                            name: name_style,
+                            license: license_style,
+                            feature: feature_style,
+                            version: self.style.version_style,
+                            suffix: self.style.suffix_style,
+                        },
                     );
                     if self.tree.is_duplicate(node_id) {
                         spans.push(Span::styled(" (*)", self.style.suffix_style));
