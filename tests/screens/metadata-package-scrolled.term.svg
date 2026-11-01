@@ -4,10 +4,8 @@
     .bg { fill: #000000 }
     .bg-bright-green { stroke: #55FF55; fill: #55FF55; user-select: none;  }
     .fg-black { fill: #000000 }
-    .fg-blue { fill: #0000AA }
     .fg-bright-cyan { fill: #55FFFF }
     .fg-bright-green { fill: #55FF55 }
-    .fg-cyan { fill: #00AAAA }
     .fg-yellow { fill: #AA5500 }
     .container {
       padding: 0 10px;
@@ -25,35 +23,35 @@
   <rect width="100%" height="100%" y="0" rx="4.5" class="bg" />
 
   <text xml:space="preserve" class="container fg">
-    <tspan x="10px" y="28px"><tspan>              </tspan><tspan>      </tspan><tspan> </tspan><tspan class="bg-bright-green">█████████████████████████████</tspan><tspan>          </tspan><tspan>                    </tspan>
+    <tspan x="10px" y="28px"><tspan>        </tspan><tspan> </tspan><tspan class="bg-bright-green">█████████████████████</tspan><tspan>                       </tspan><tspan class="bg-bright-green">█████████</tspan><tspan>          </tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="28px"><tspan>cargo-tree-tui</tspan><tspan class="fg-cyan"> v0.1.</tspan><tspan class="fg-bright-green bold">┌</tspan><tspan class="fg-black bold"> DEPENDENCY METADATA Package </tspan><tspan class="fg-bright-green bold">│ Usage ─┐</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="28px"><tspan>cargo-tr</tspan><tspan class="fg-bright-green bold">┌</tspan><tspan class="fg-black bold"> DEPENDENCY METADATA </tspan><tspan class="fg-bright-green bold">───────────────────────</tspan><tspan class="fg-black bold"> Package </tspan><tspan class="fg-bright-green bold">│ Usage ─┐</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="46px"><tspan>├──▾ </tspan><tspan class="fg-yellow bold">cargo</tspan><tspan class="fg-cyan"> v0.95.0</tspan><tspan class="fg-blue bold"> (</tspan><tspan class="fg-bright-green bold">│</tspan><tspan> integration test                   ▲ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="46px"><tspan>├──▾ </tspan><tspan class="fg-yellow bold">car</tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Source</tspan><tspan>             crates.io                               ▲ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="64px"><tspan>│  └──• termwiz</tspan><tspan class="fg-cyan"> v0.2</tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Source</tspan><tspan>             crates.io       ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="64px"><tspan>│  └──• </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Description</tspan><tspan>        A deliberately long crate description   ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="82px"><tspan>└──• anyhow</tspan><tspan class="fg-cyan"> v1.0.104</tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Description</tspan><tspan>        A deliberately  ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="82px"><tspan>└──• any</tspan><tspan class="fg-bright-green bold">│</tspan><tspan> used to exercise wrapping and scrolling inside the         ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="100px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> long crate description used to     ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="100px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> dependency metadata panel.                                 ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="118px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> exercise wrapping and scrolling    ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="118px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">License</tspan><tspan>            MIT OR Apache-2.0                       ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="136px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> inside the dependency metadata     ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="136px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Repository</tspan><tspan>         </tspan><tspan class="italic">https://github.com/example/cargo</tspan><tspan>        ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="154px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> panel.                             ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="154px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Homepage</tspan><tspan>           </tspan><tspan class="italic">https://example.com/cargo</tspan><tspan>               ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="172px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">License</tspan><tspan>            MIT OR          ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="172px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Documentation</tspan><tspan>      </tspan><tspan class="italic">https://docs.rs/cargo</tspan><tspan>                   ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="190px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> Apache-2.0                         ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="190px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Authors</tspan><tspan>            Cargo contributors                      ▐ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="208px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Repository</tspan><tspan>                         ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="208px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Keywords</tspan><tspan>           package, resolver                       ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="226px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="italic">https://github.com/example/cargo</tspan><tspan>   ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="226px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Categories</tspan><tspan>         development-tools                       ┆ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="244px"><tspan>                    </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Homepage</tspan><tspan>                           ▼ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="244px"><tspan>        </tspan><tspan class="fg-bright-green bold">│</tspan><tspan> </tspan><tspan class="fg-bright-cyan bold">Library</tspan><tspan>            cargo                                   ▼ </tspan><tspan class="fg-bright-green bold">│</tspan><tspan>        </tspan>
 </tspan>
-    <tspan x="10px" y="262px"><tspan>                    </tspan><tspan class="fg-bright-green bold">└──────────────────────────────────────┘</tspan><tspan>                    </tspan>
+    <tspan x="10px" y="262px"><tspan>        </tspan><tspan class="fg-bright-green bold">└──────────────────────────────────────────────────────────────┘</tspan><tspan>        </tspan>
 </tspan>
     <tspan x="10px" y="280px"><tspan>                                                                                </tspan>
 </tspan>
