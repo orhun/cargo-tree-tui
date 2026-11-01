@@ -1,5 +1,12 @@
 use ratatui::{layout::Rect, widgets::Block};
 
+/// Alignment to use when sibling navigation moves the selection off screen.
+#[derive(Debug, Copy, Clone)]
+pub enum ScrollAlignment {
+    Top,
+    Center,
+}
+
 /// Viewport information for rendering the tree widget.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct Viewport {
@@ -40,6 +47,7 @@ impl Viewport {
         total_lines: usize,
         reserved_lines: usize,
         prev_offset: usize,
+        sibling_alignment: Option<ScrollAlignment>,
     ) -> Self {
         if self.height > 0 && reserved_lines > 0 {
             self.height = self.height.saturating_sub(reserved_lines);
@@ -51,6 +59,22 @@ impl Viewport {
         }
 
         self.max_offset = total_lines.saturating_sub(self.height);
+
+        if let Some(alignment) = sibling_alignment {
+            let visible_end = prev_offset.saturating_add(self.height);
+            if focus_line >= prev_offset && focus_line < visible_end {
+                self.offset = prev_offset;
+                return self;
+            }
+
+            self.offset = match alignment {
+                ScrollAlignment::Top => focus_line,
+                ScrollAlignment::Center => focus_line.saturating_sub(self.height / 2),
+            }
+            .min(self.max_offset);
+            return self;
+        }
+
         let margin = (self.height / 4).max(1);
 
         // Start from the previous offset.

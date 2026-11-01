@@ -3,7 +3,7 @@ use rustc_hash::FxHashSet;
 use crate::core::{DependencyNode, DependencyTree, NodeId};
 
 use super::view_cache::ViewCache;
-use super::viewport::Viewport;
+use super::viewport::{ScrollAlignment, Viewport};
 
 /// The widget uses three different index spaces:
 ///
@@ -41,6 +41,8 @@ pub struct TreeWidgetState {
     pub open: Vec<bool>,
     /// Virtual position of the selected node in the full flattened tree.
     selected_virtual_pos: Option<VirtualPos>,
+    /// Scroll alignment requested by sibling navigation for the current selection.
+    sibling_scroll: Option<(VirtualPos, ScrollAlignment)>,
     /// Current viewport.
     pub viewport: Viewport,
     /// Whether subtree sizes need recomputation.
@@ -111,6 +113,7 @@ impl Default for TreeWidgetState {
         Self {
             open: Vec::new(),
             selected_virtual_pos: None,
+            sibling_scroll: None,
             viewport: Viewport::default(),
             subtree_dirty: true,
             dirty: true,
@@ -393,9 +396,23 @@ impl TreeWidgetState {
             && let Some(sibling) = pick(vnode)
             && let Some(sibling_node) = self.active_visible_nodes().get(sibling.0)
         {
-            self.selected_virtual_pos = Some(sibling_node.virtual_pos);
+            let target = sibling_node.virtual_pos;
+            let alignment = if sibling_node.parent_vis_idx.is_none() {
+                ScrollAlignment::Top
+            } else {
+                ScrollAlignment::Center
+            };
+            self.selected_virtual_pos = Some(target);
+            self.sibling_scroll = Some((target, alignment));
             self.dirty = true;
         }
+    }
+
+    /// Returns the pending sibling-navigation alignment for the selected node.
+    pub(crate) fn take_sibling_scroll_alignment(&mut self) -> Option<ScrollAlignment> {
+        let selected = self.selected_virtual_pos?;
+        let (target, alignment) = self.sibling_scroll.take()?;
+        (target == selected).then_some(alignment)
     }
 
     /// Moves the selection up by approximately one page.
