@@ -21,6 +21,7 @@ rustc-hash = "2.1.3"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+snapbox = { version = "1.0.0", features = ["term-svg"] }
 
 [profile.release]
 codegen-units = 1 # Allows compiler to perform better optimization.
