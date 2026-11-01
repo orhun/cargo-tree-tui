@@ -747,7 +747,7 @@ fn metadata_usage_tab_without_declarations() {
 fn metadata_usage_with_declaration() {
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/feature-cli/app/Cargo.toml");
-    let tree = DependencyTree::load_with_options_and_format(
+    let mut tree = DependencyTree::load_with_options_and_format(
         Some(manifest.clone()),
         &ResolutionOptions::default(),
         PackageFormatRequirements::default().with_metadata(),
@@ -773,6 +773,17 @@ fn metadata_usage_with_declaration() {
                 .and_then(DependencyNode::as_dependency)
                 .is_some_and(|dependency| dependency.package_id == Some(usage.parent))
         }));
+    }
+    // Keep the narrow usage-tree labels independent of the checkout path.
+    for node in &mut tree.nodes {
+        if let DependencyNode::Crate(dependency) = node
+            && dependency.manifest_dir.is_some()
+        {
+            dependency.manifest_dir = Some("fixture".to_owned());
+            if let Some(metadata) = &mut dependency.format_metadata {
+                Arc::make_mut(metadata).source = Some("fixture".to_owned());
+            }
+        }
     }
     let mut state = state_for_tree(tree, Some(manifest));
     state.show_metadata = true;
