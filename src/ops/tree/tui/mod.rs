@@ -60,7 +60,7 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
         InputMode::Search | InputMode::SearchResults
     ) {
         Some(Line::from(vec![
-            Span::raw(format!("{} ", state.search_prompt_symbol())).bold(),
+            Span::raw(state.search_prompt_symbol().to_string()).bold(),
             Span::raw(state.search_query.as_str()),
         ]))
     } else {
@@ -71,6 +71,7 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
             ])
         })
     };
+    let prompt_width = prompt.as_ref().map_or(0, Line::width);
 
     let tree_widget = TreeWidget::new(&state.dependency_tree)
         .prefix(state.prefix)
@@ -87,9 +88,8 @@ pub fn draw_tree(frame: &mut Frame, area: Rect, state: &mut TuiState) {
     frame.render_stateful_widget(tree_widget, area, &mut state.tree_widget_state);
 
     if state.input_mode == InputMode::Search {
-        let query = state.search_query.as_str();
         frame.set_cursor_position(Position::new(
-            area.x + Line::from(query).width() as u16 + 1,
+            area.x.saturating_add(prompt_width as u16),
             area.bottom().saturating_sub(2),
         ));
     }
