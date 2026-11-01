@@ -520,6 +520,7 @@ mod tests {
             workspace_name: String::from("test"),
             nodes,
             parents,
+            dependency_usages: Default::default(),
             roots: vec![NodeId(0)],
         }
     }

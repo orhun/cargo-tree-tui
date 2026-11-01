@@ -6,7 +6,7 @@ use cargo::{
     core::{
         FeatureValue, Package, PackageId, PackageIdSpec, PackageIdSpecQuery, Target, Workspace,
         compiler::{CompileKind, RustcTargetData},
-        dependency::DepKind,
+        dependency::{DepKind, Dependency as CargoDependency},
         resolver::features::{CliFeatures, ForceAllTargets, HasDevUnits},
     },
     ops,
@@ -92,6 +92,15 @@ impl From<&PackageSnapshot> for Dependency {
             children: Vec::new(), // filled in by wire_edges
         }
     }
+}
+
+/// A manifest dependency declaration that resolves to a package.
+#[derive(Debug, Clone)]
+pub struct DependencyUsage {
+    pub parent: PackageId,
+    pub kind: DependencyType,
+    /// Cargo's declaration, shared with the resolved graph.
+    pub dependency: CargoDependency,
 }
 
 /// Package metadata fields needed by tree formatting or the TUI details popup.
@@ -248,6 +257,8 @@ pub struct DependencyTree {
     pub nodes: Vec<DependencyNode>,
     /// For each node, the list of parent node ids (reverse index of children).
     pub parents: Vec<Vec<NodeId>>,
+    /// Incoming manifest declarations keyed by the package they resolve to.
+    pub dependency_usages: FxHashMap<PackageId, Vec<DependencyUsage>>,
     /// Workspace members represented as node ids (entry points into the arena).
     pub roots: Vec<NodeId>,
 }
@@ -294,9 +305,20 @@ impl DependencyTree {
                 &resolved.workspace_members,
             );
         }
+        let mut dependency_usages = resolved.usages;
+        for usages in dependency_usages.values_mut() {
+            usages.sort_by(|left, right| {
+                (left.parent, left.kind, left.dependency.name_in_toml()).cmp(&(
+                    right.parent,
+                    right.kind,
+                    right.dependency.name_in_toml(),
+                ))
+            });
+        }
         let tree = DependencyTree {
             workspace_name,
             parents,
+            dependency_usages,
             nodes: collected.nodes,
             roots: collected.roots,
         };
@@ -660,6 +682,8 @@ struct ResolvedWorkspace {
     workspace_members: FxHashSet<PackageId>,
     /// Deduplicated, classified outgoing edges keyed by source package.
     edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>>,
+    /// Incoming manifest declarations keyed by the package they resolve to.
+    usages: FxHashMap<PackageId, Vec<DependencyUsage>>,
     /// Dependency declarations in manifest direction, used to expand feature definitions.
     feature_dependencies: FxHashMap<PackageId, Vec<FeatureDependency>>,
     /// Feature-bearing dependencies in display direction (reversed for `--invert`).
@@ -846,6 +870,7 @@ impl ResolvedWorkspace {
         // Build classified, kind-deduplicated edges keyed by source package.
         let mut edges: FxHashMap<PackageId, Vec<(PackageId, DependencyType)>> =
             FxHashMap::default();
+        let mut usages: FxHashMap<PackageId, Vec<DependencyUsage>> = FxHashMap::default();
         let mut feature_dependencies: FxHashMap<PackageId, Vec<FeatureDependency>> =
             FxHashMap::default();
         for &pkg_id in packages.keys() {
@@ -871,6 +896,13 @@ impl ResolvedWorkspace {
                         || prune_specs.iter().any(|spec| spec.matches(dep_id))
                     {
                         continue;
+                    }
+                    if format_requirements.metadata && packages.contains_key(&pkg_id) {
+                        usages.entry(dep_id).or_default().push(DependencyUsage {
+                            parent: pkg_id,
+                            kind,
+                            dependency: dep.clone(),
+                        });
                     }
                     if edge_kinds.features {
                         let feature_dependency = FeatureDependency {
@@ -982,6 +1014,7 @@ impl ResolvedWorkspace {
             packages,
             workspace_members,
             edges,
+            usages,
             feature_dependencies,
             graph_feature_dependencies,
             feature_map,
