@@ -26,6 +26,7 @@ enum SelectorKind {
     Targets,
     Features,
     Packages,
+    Format,
 }
 
 #[derive(Debug)]
@@ -89,6 +90,7 @@ pub struct TuiState {
     pub prefix: TreePrefix,
     pub charset: TreeCharset,
     pub format: TreeFormat,
+    pending_format: Option<TreeFormat>,
     pub tree_widget_state: TreeWidgetState,
     pub show_help: bool,
     pub input_mode: InputMode,
@@ -134,6 +136,7 @@ impl TuiState {
             prefix,
             charset,
             format,
+            pending_format: None,
             tree_widget_state,
             show_help: false,
             input_mode: InputMode::Normal,
@@ -257,6 +260,9 @@ impl TuiState {
             }
             (KeyCode::Char('p'), _) => {
                 self.open_package_selector();
+            }
+            (KeyCode::Char('m'), _) => {
+                self.open_format_selector();
             }
             (KeyCode::Char('i'), _) => {
                 self.invert_selected_package();
@@ -493,6 +499,22 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
+    fn open_format_selector(&mut self) {
+        let fields = self.format.fields();
+        let options = FORMAT_FIELDS
+            .iter()
+            .zip(fields)
+            .map(|((value, label), checked)| SelectorOption::new(*value, *label, checked))
+            .collect();
+        self.selector = Some(
+            SelectorState::new("Package format", options)
+                .editor(self.format.raw())
+                .max_height(16),
+        );
+        self.selector_kind = Some(SelectorKind::Format);
+        self.input_mode = InputMode::Selector;
+    }
+
     fn handle_selector_key(&mut self, key: KeyCode) {
         let Some(selector) = self.selector.as_mut() else {
             self.input_mode = InputMode::Normal;
@@ -507,19 +529,42 @@ impl TuiState {
 
         match key {
             KeyCode::Esc => {
+                if self.selector_kind == Some(SelectorKind::Format) {
+                    self.pending_format = None;
+                }
                 self.selector = None;
                 self.selector_kind = None;
                 self.input_mode = InputMode::Normal;
             }
             KeyCode::Up => selector.move_up(),
             KeyCode::Down => selector.move_down(),
+            KeyCode::Left if selector.editor.is_some() => selector.move_editor_cursor_left(),
+            KeyCode::Right if selector.editor.is_some() => selector.move_editor_cursor_right(),
+            KeyCode::Home if selector.editor.is_some() => selector.move_editor_cursor_start(),
+            KeyCode::End if selector.editor.is_some() => selector.move_editor_cursor_end(),
+            KeyCode::Delete if selector.editor.is_some() => {
+                selector.delete_editor_char();
+                update_format_selector(selector);
+            }
             KeyCode::Tab if selector.has_tabs() => selector.next_tab(),
+            KeyCode::Char(' ') if self.selector_kind == Some(SelectorKind::Format) => {
+                selector.toggle_selected();
+                set_format_editor_from_options(selector);
+            }
             KeyCode::Char(' ') if self.selector_kind == Some(SelectorKind::Packages) => {
                 toggle_package_option(selector);
             }
-            KeyCode::Char(' ') => selector.toggle_selected(),
+            KeyCode::Char(' ') if selector.editor.is_none() => selector.toggle_selected(),
+            KeyCode::Backspace if selector.editor.is_some() => {
+                selector.backspace_editor();
+                update_format_selector(selector);
+            }
             KeyCode::Backspace => selector.pop_filter_char(),
-            KeyCode::Char(ch) => selector.push_filter_char(ch),
+            KeyCode::Char(ch) if selector.editor.is_some() => {
+                selector.insert_editor_char(ch);
+                update_format_selector(selector);
+            }
+            KeyCode::Char(ch) if selector.filter.is_some() => selector.push_filter_char(ch),
             KeyCode::Enter => self.apply_selector_selection(),
             _ => {}
         }
@@ -531,7 +576,59 @@ impl TuiState {
             Some(SelectorKind::Targets) => self.apply_target_selection(),
             Some(SelectorKind::Features) => self.apply_feature_selection(),
             Some(SelectorKind::Packages) => self.apply_package_selection(),
+            Some(SelectorKind::Format) => self.apply_format_selection(),
             None => {}
+        }
+    }
+
+    fn apply_format_selection(&mut self) {
+        let Some(selector) = self.selector.as_ref() else {
+            return;
+        };
+        let Some(raw_format) = selector.editor.as_deref() else {
+            return;
+        };
+        let format = match TreeFormat::parse(raw_format) {
+            Ok(format) => format,
+            Err(error) => {
+                if let Some(selector) = self.selector.as_mut() {
+                    selector.message = Some(error.to_string());
+                }
+                return;
+            }
+        };
+        if format.raw() == self.format.raw() {
+            self.pending_format = None;
+            self.selector = None;
+            self.selector_kind = None;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        if format_requirements_cover(self.format.requirements(), format.requirements()) {
+            self.pending_format = None;
+            self.format = format;
+            self.selector = None;
+            self.selector_kind = None;
+            self.input_mode = InputMode::Normal;
+            return;
+        }
+
+        let options = self.tree_options.clone();
+        self.pending_format = Some(format.clone());
+        self.resolution_generation = self.resolution_generation.wrapping_add(1);
+        let request = TreeResolutionRequest {
+            generation: self.resolution_generation,
+            format_requirements: format.requirements(),
+            options,
+        };
+        if self.resolution_tx.send(request).is_ok() {
+            if let Some(selector) = self.selector.as_mut() {
+                selector.applying = true;
+                selector.message = None;
+            }
+        } else if let Some(selector) = self.selector.as_mut() {
+            selector.message = Some("Could not start dependency resolution".to_owned());
         }
     }
 
@@ -738,6 +835,9 @@ impl TuiState {
         match result.result {
             Ok(dependency_tree) => {
                 self.resolution_applying = false;
+                if let Some(format) = self.pending_format.take() {
+                    self.format = format;
+                }
                 self.search_generation = self.search_generation.wrapping_add(1);
                 self.search_query.clear();
                 self.search_running = false;
@@ -868,6 +968,51 @@ const ALL_FEATURES: &str = "__cargo_tree_tui_all_features";
 const WORKSPACE_PACKAGES: &str = "__cargo_tree_tui_workspace_packages";
 const INCLUDE_PACKAGE: &str = "__cargo_tree_tui_include_package:";
 const EXCLUDE_PACKAGE: &str = "__cargo_tree_tui_exclude_package:";
+const FORMAT_FIELDS: [(&str, &str); 5] = [
+    ("{p}", "Package (name, version, source)"),
+    ("{l}", "License"),
+    ("{r}", "Repository"),
+    ("{f}", "Enabled features"),
+    ("{lib}", "Library name"),
+];
+
+fn set_format_editor_from_options(selector: &mut SelectorState) {
+    let format = selector
+        .options
+        .iter()
+        .filter(|option| option.checked)
+        .map(|option| option.value.as_str())
+        .collect::<Vec<_>>()
+        .join(" ");
+    selector.set_editor(format);
+    selector.message = None;
+}
+
+fn update_format_selector(selector: &mut SelectorState) {
+    let Some(editor) = selector.editor.as_deref() else {
+        return;
+    };
+    match TreeFormat::parse(editor) {
+        Ok(format) => {
+            for (option, checked) in selector.options.iter_mut().zip(format.fields()) {
+                option.checked = checked;
+            }
+            selector.message = None;
+        }
+        Err(error) => selector.message = Some(error.to_string()),
+    }
+}
+
+fn format_requirements_cover(
+    loaded: PackageFormatRequirements,
+    requested: PackageFormatRequirements,
+) -> bool {
+    (!requested.license || loaded.license)
+        && (!requested.repository || loaded.repository)
+        && (!requested.features || loaded.features)
+        && (!requested.library || loaded.library)
+        && (!requested.source || loaded.source)
+}
 
 fn toggle_package_option(selector: &mut SelectorState) {
     let Some(&option_index) = selector.visible_options().get(selector.selected) else {

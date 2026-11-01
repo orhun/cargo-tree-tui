@@ -15,6 +15,7 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
     ("t", "Select target triples"),
     ("f", "Select features"),
     ("p", "Select packages"),
+    ("m", "Edit package format"),
     ("←", "Collapse selected"),
     ("→", "Expand selected"),
     ("space", "Toggle expand/collapse"),

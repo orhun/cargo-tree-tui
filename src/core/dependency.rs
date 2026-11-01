@@ -95,7 +95,7 @@ impl From<&PackageSnapshot> for Dependency {
 }
 
 /// Package metadata fields needed by a Cargo-style tree format.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct PackageFormatRequirements {
     pub license: bool,
     pub repository: bool,
