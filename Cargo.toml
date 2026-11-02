@@ -1,8 +1,12 @@
 [package]
 name = "cargo-tree-tui"
-description = "Display an interactive tree visualization of a dependency graph"
+description = "Display an interactive tree visualization of your Rust dependency graph"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+documentation = "https://docs.rs/cargo-tree-tui"
+homepage = "https://github.com/orhun/cargo-tree-tui"
+repository = "https://github.com/orhun/cargo-tree-tui"
 
 [[bin]]
 name = "cargo-tree-tui"

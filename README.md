@@ -21,3 +21,7 @@ cargo tree-tui
 ## talk
 
 Conference talk: [There are rats in my Cargo!!! by Orhun Parmaksiz | Rustikon 2026](https://www.youtube.com/watch?v=8SLGAFgX-PA)
+
+## license
+
+MIT OR Apache-2.0
