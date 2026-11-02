@@ -6,7 +6,9 @@
 
 ```bash
 cargo install cargo-tree-tui
-# or
+```
+
+```bash
 cargo install --git https://github.com/orhun/cargo-tree-tui.git
 ```
 
