@@ -1,451 +1,9 @@
-use std::path::PathBuf;
-use std::{
-    process::{Command, Stdio},
-    sync::{Arc, OnceLock, mpsc::Sender},
-};
+//! Configure interactive tree selectors and their choices.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-
-use super::TuiTree;
-use super::selector::{SelectorOption, SelectorState};
-use crate::core::dependency::{
-    DependencyNode, DependencyType, workspace_features, workspace_packages,
-};
-use crate::core::{Dependency, PackageFormatRequirements, ResolutionOptions};
-
-use super::metadata::MetadataPopupState;
-use super::widget::{SearchState, TreeCharset, TreeFormat, TreePrefix, TreeWidgetState};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputMode {
-    Normal,
-    Search,
-    SearchResults,
-    Selector,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SelectorKind {
-    EdgeKinds,
-    Targets,
-    Features,
-    Packages,
-    Format,
-}
-
-#[derive(Debug)]
-pub enum Event {
-    Key(KeyEvent),
-    SearchResult(SearchResult),
-    TreeResolved(TreeResolutionResult),
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchRequest {
-    pub generation: u64,
-    pub query: String,
-    pub dependency_tree: Arc<TuiTree>,
-}
-
-#[derive(Debug)]
-pub struct SearchResult {
-    pub generation: u64,
-    pub query: String,
-    pub search_state: SearchState,
-}
-
-#[derive(Debug, Clone)]
-pub struct TreeResolutionRequest {
-    pub generation: u64,
-    pub options: TreeOptions,
-    pub format_requirements: PackageFormatRequirements,
-}
-
-#[derive(Debug)]
-pub struct TreeResolutionResult {
-    pub generation: u64,
-    pub options: TreeOptions,
-    pub result: Result<Arc<TuiTree>, String>,
-}
-
-/// CLI options used to resolve and prepare the tree shown in the TUI.
-#[derive(Debug, Clone)]
-pub struct TreeOptions {
-    pub manifest_path: Option<PathBuf>,
-    pub resolution: ResolutionOptions,
-    pub no_dedupe: bool,
-}
-
-pub struct TuiChannels {
-    pub search: Sender<SearchRequest>,
-    pub resolution: Sender<TreeResolutionRequest>,
-    pub resolution_resume: Sender<()>,
-}
-
-#[derive(Debug)]
-pub struct TuiState {
-    pub running: bool,
-    pub dependency_tree: Arc<TuiTree>,
-    pub tree_options: TreeOptions,
-    pub selector: Option<SelectorState>,
-    selector_kind: Option<SelectorKind>,
-    feature_choices: Option<Vec<String>>,
-    package_choices: Option<Vec<String>>,
-    pub prefix: TreePrefix,
-    pub charset: TreeCharset,
-    pub format: TreeFormat,
-    pending_format: Option<TreeFormat>,
-    pub tree_widget_state: TreeWidgetState,
-    pub show_help: bool,
-    pub show_metadata: bool,
-    pub metadata_popup: MetadataPopupState,
-    pub input_mode: InputMode,
-    pub search_query: String,
-    pub search_running: bool,
-    invert_restore: Option<Option<Vec<String>>>,
-    invert_target: Option<String>,
-    pub(crate) invert_prompt: Option<String>,
-    invert_reverting: bool,
-    spinner_frame: usize,
-    search_generation: u64,
-    search_tx: Sender<SearchRequest>,
-    resolution_generation: u64,
-    resolution_applying: bool,
-    resolution_tx: Sender<TreeResolutionRequest>,
-    resolution_resume_tx: Sender<()>,
-}
+use super::*;
 
 impl TuiState {
-    pub fn new(
-        dependency_tree: Arc<TuiTree>,
-        channels: TuiChannels,
-        depth: Option<usize>,
-        prefix: TreePrefix,
-        charset: TreeCharset,
-        format: TreeFormat,
-        tree_options: TreeOptions,
-    ) -> Self {
-        let mut tree_widget_state = TreeWidgetState::default();
-        if let Some(depth) = depth {
-            tree_widget_state.open_to_dependency_depth(&dependency_tree, depth);
-        } else {
-            tree_widget_state.expand_all(&dependency_tree);
-        }
-        TuiState {
-            running: true,
-            dependency_tree,
-            tree_options,
-            selector: None,
-            selector_kind: None,
-            feature_choices: None,
-            package_choices: None,
-            prefix,
-            charset,
-            format,
-            pending_format: None,
-            tree_widget_state,
-            show_help: false,
-            show_metadata: false,
-            metadata_popup: MetadataPopupState::default(),
-            input_mode: InputMode::Normal,
-            search_query: String::new(),
-            search_running: false,
-            invert_restore: None,
-            invert_target: None,
-            invert_prompt: None,
-            invert_reverting: false,
-            spinner_frame: 0,
-            search_generation: 0,
-            search_tx: channels.search,
-            resolution_generation: 0,
-            resolution_applying: false,
-            resolution_tx: channels.resolution,
-            resolution_resume_tx: channels.resolution_resume,
-        }
-    }
-
-    pub fn resolution_pending(&self) -> bool {
-        self.resolution_applying
-            || self
-                .selector
-                .as_ref()
-                .is_some_and(|selector| selector.applying)
-    }
-
-    pub fn resume_resolution(&self) {
-        let _ = self.resolution_resume_tx.send(());
-    }
-
-    pub fn handle_event(&mut self, event: Event) {
-        match event {
-            Event::Key(key_event) => self.handle_key_event(key_event),
-            Event::SearchResult(search_result) => self.handle_search_result(search_result),
-            Event::TreeResolved(result) => self.handle_tree_resolved(result),
-        }
-    }
-
-    pub fn advance_spinner(&mut self) {
-        if self.search_running {
-            self.spinner_frame = self.spinner_frame.wrapping_add(1);
-        }
-    }
-
-    pub fn search_prompt_symbol(&self) -> char {
-        const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
-        if self.search_running {
-            FRAMES[self.spinner_frame % FRAMES.len()]
-        } else {
-            '/'
-        }
-    }
-
-    pub fn selected_dependency<'a>(
-        tree: &'a TuiTree,
-        tree_widget_state: &TreeWidgetState,
-    ) -> Option<&'a Dependency> {
-        let mut node_id = tree_widget_state.selected_node_id()?;
-        loop {
-            let node = tree.node(node_id)?;
-            if let Some(dependency) = node.as_dependency() {
-                return Some(dependency);
-            }
-            node_id = *tree.parents.get(node_id.0)?.first()?;
-        }
-    }
-
-    fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if self.show_help {
-            // Close help popup on any key press
-            self.show_help = false;
-        }
-        if key_event.kind != KeyEventKind::Press && key_event.modifiers.is_empty() {
-            return;
-        }
-
-        if self.input_mode == InputMode::Selector {
-            self.handle_selector_key(key_event.code);
-            return;
-        }
-
-        if self.input_mode == InputMode::Search {
-            match key_event.code {
-                KeyCode::Esc => {
-                    self.clear_search();
-                }
-                KeyCode::Enter => {
-                    if self.search_query.is_empty() {
-                        self.clear_search();
-                    } else {
-                        self.input_mode = InputMode::SearchResults;
-                    }
-                }
-                KeyCode::Backspace => {
-                    if self.search_query.pop().is_none() {
-                        self.clear_search();
-                    } else {
-                        self.request_search();
-                    }
-                }
-                KeyCode::Char(c) => {
-                    self.search_query.push(c);
-                    self.request_search();
-                }
-                _ => {}
-            }
-            return;
-        }
-
-        if self.show_metadata {
-            match key_event.code {
-                KeyCode::Tab => {
-                    self.metadata_popup.tab.next();
-                    self.metadata_popup.scroll = 0;
-                    return;
-                }
-                KeyCode::BackTab => {
-                    self.metadata_popup.tab.previous();
-                    self.metadata_popup.scroll = 0;
-                    return;
-                }
-                _ => {}
-            }
-            if key_event.modifiers.contains(KeyModifiers::SHIFT) {
-                match key_event.code {
-                    KeyCode::PageDown => {
-                        self.metadata_popup.scroll = self
-                            .metadata_popup
-                            .scroll
-                            .saturating_add(self.metadata_popup.page_size.max(1));
-                        return;
-                    }
-                    KeyCode::PageUp => {
-                        self.metadata_popup.scroll = self
-                            .metadata_popup
-                            .scroll
-                            .saturating_sub(self.metadata_popup.page_size.max(1));
-                        return;
-                    }
-                    KeyCode::Up
-                        if self.metadata_popup.tab == super::metadata::MetadataTab::Usage =>
-                    {
-                        self.metadata_popup.move_usage_selection(false);
-                        self.metadata_popup.scroll = 0;
-                        return;
-                    }
-                    KeyCode::Down
-                        if self.metadata_popup.tab == super::metadata::MetadataTab::Usage =>
-                    {
-                        self.metadata_popup.move_usage_selection(true);
-                        self.metadata_popup.scroll = 0;
-                        return;
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        let selected_before = self.tree_widget_state.selected_node_id();
-        match (key_event.code, key_event.modifiers) {
-            (KeyCode::Esc, _) if self.input_mode == InputMode::SearchResults => {
-                self.clear_search();
-            }
-            (KeyCode::Esc, _) if self.invert_restore.is_some() => {
-                self.restore_inverted_tree();
-            }
-            (KeyCode::Char('q'), _) => {
-                self.running = false;
-            }
-            (KeyCode::Char('?'), _) => {
-                self.show_help = !self.show_help;
-            }
-            (KeyCode::Char('/'), _) => {
-                self.input_mode = InputMode::Search;
-            }
-            (KeyCode::Char('e'), _) => {
-                self.open_edge_selector();
-            }
-            (KeyCode::Char('t'), _) => {
-                self.open_target_selector();
-            }
-            (KeyCode::Char('f'), _) => {
-                self.open_feature_selector();
-            }
-            (KeyCode::Char('p'), _) => {
-                self.open_package_selector();
-            }
-            (KeyCode::Char('m') | KeyCode::Enter, _) => {
-                self.show_metadata = !self.show_metadata;
-            }
-            (KeyCode::Char('o'), _) => {
-                self.open_selected_dependency();
-            }
-            (KeyCode::Char('d'), _) => {
-                self.open_selected_docs_rs();
-            }
-            (KeyCode::Char('M'), _) => {
-                self.open_format_selector();
-            }
-            (KeyCode::Char('c'), _) => {
-                self.charset = match self.charset {
-                    TreeCharset::Utf8 => TreeCharset::Ascii,
-                    TreeCharset::Ascii => TreeCharset::Utf8,
-                };
-            }
-            (KeyCode::Char('i'), _) => {
-                self.invert_selected_package();
-            }
-            (KeyCode::Char('P'), _) => {
-                self.tree_widget_state.select_parent(&self.dependency_tree);
-            }
-            (KeyCode::Char(']'), _) => {
-                self.tree_widget_state
-                    .select_next_sibling(&self.dependency_tree);
-            }
-            (KeyCode::Char('['), _) => {
-                self.tree_widget_state
-                    .select_previous_sibling(&self.dependency_tree);
-            }
-            (KeyCode::Down, _) => {
-                self.tree_widget_state.select_next(&self.dependency_tree);
-            }
-            (KeyCode::Up, _) => {
-                self.tree_widget_state
-                    .select_previous(&self.dependency_tree);
-            }
-            (KeyCode::PageDown, _) => {
-                self.tree_widget_state.page_down(&self.dependency_tree);
-            }
-            (KeyCode::PageUp, _) => {
-                self.tree_widget_state.page_up(&self.dependency_tree);
-            }
-            (KeyCode::Char(' '), _) => {
-                self.tree_widget_state.toggle(&self.dependency_tree);
-            }
-            (KeyCode::Right, _) => {
-                self.tree_widget_state.expand(&self.dependency_tree);
-            }
-            (KeyCode::Left, _) => {
-                self.tree_widget_state.collapse(&self.dependency_tree);
-            }
-            _ => {}
-        }
-        if self.show_metadata && self.tree_widget_state.selected_node_id() != selected_before {
-            self.metadata_popup.scroll = 0;
-        }
-    }
-
-    fn open_selected_dependency(&self) {
-        let Some(dependency) =
-            Self::selected_dependency(&self.dependency_tree, &self.tree_widget_state)
-        else {
-            return;
-        };
-        let Some(package_id) = dependency.package_id else {
-            return;
-        };
-        let source_id = package_id.source_id();
-        if source_id.is_path() {
-            return;
-        }
-
-        let url = format!(
-            "https://crates.io/crates/{}/{}",
-            dependency.name, dependency.version
-        );
-        let _ = open_url(&url);
-    }
-
-    fn open_selected_docs_rs(&self) {
-        let Some(dependency) =
-            Self::selected_dependency(&self.dependency_tree, &self.tree_widget_state)
-        else {
-            return;
-        };
-        let Some(package_id) = dependency.package_id else {
-            return;
-        };
-        if package_id.source_id().is_path() {
-            return;
-        }
-
-        let url = format!("https://docs.rs/{}/{}", dependency.name, dependency.version);
-        let _ = open_url(&url);
-    }
-
-    fn handle_search_result(&mut self, search_result: SearchResult) {
-        if search_result.generation != self.search_generation
-            || search_result.query != self.search_query
-        {
-            return;
-        }
-
-        self.search_running = false;
-        self.tree_widget_state
-            .apply_search_state(&self.dependency_tree, search_result.search_state);
-        self.metadata_popup.scroll = 0;
-    }
-
-    fn open_edge_selector(&mut self) {
+    pub(super) fn open_edge_selector(&mut self) {
         let selected = edge_kinds(&self.tree_options.resolution);
         self.selector = Some(SelectorState::new(
             "Dependency edge kinds",
@@ -468,7 +26,7 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
-    fn open_target_selector(&mut self) {
+    pub(super) fn open_target_selector(&mut self) {
         let current_targets = target_selection(&self.tree_options.resolution);
         let mut candidates = target_choices().to_vec();
         for target in &self.tree_options.resolution.targets {
@@ -509,7 +67,7 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
-    fn open_feature_selector(&mut self) {
+    pub(super) fn open_feature_selector(&mut self) {
         let mut load_error = None;
         let choices = if let Some(choices) = &self.feature_choices {
             choices.clone()
@@ -566,7 +124,7 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
-    fn open_package_selector(&mut self) {
+    pub(super) fn open_package_selector(&mut self) {
         let mut load_error = None;
         let choices = if let Some(choices) = &self.package_choices {
             choices.clone()
@@ -628,7 +186,7 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
-    fn open_format_selector(&mut self) {
+    pub(super) fn open_format_selector(&mut self) {
         let fields = self.format.fields();
         let options = FORMAT_FIELDS
             .iter()
@@ -644,7 +202,7 @@ impl TuiState {
         self.input_mode = InputMode::Selector;
     }
 
-    fn handle_selector_key(&mut self, key: KeyCode) {
+    pub(super) fn handle_selector_key(&mut self, key: KeyCode) {
         let Some(selector) = self.selector.as_mut() else {
             self.input_mode = InputMode::Normal;
             return;
@@ -699,7 +257,7 @@ impl TuiState {
         }
     }
 
-    fn apply_selector_selection(&mut self) {
+    pub(super) fn apply_selector_selection(&mut self) {
         match self.selector_kind {
             Some(SelectorKind::EdgeKinds) => self.apply_edge_selection(),
             Some(SelectorKind::Targets) => self.apply_target_selection(),
@@ -710,7 +268,7 @@ impl TuiState {
         }
     }
 
-    fn apply_format_selection(&mut self) {
+    pub(super) fn apply_format_selection(&mut self) {
         let Some(selector) = self.selector.as_ref() else {
             return;
         };
@@ -764,7 +322,7 @@ impl TuiState {
         }
     }
 
-    fn apply_edge_selection(&mut self) {
+    pub(super) fn apply_edge_selection(&mut self) {
         let Some(selector) = self.selector.as_ref() else {
             return;
         };
@@ -808,7 +366,7 @@ impl TuiState {
         }
     }
 
-    fn apply_target_selection(&mut self) {
+    pub(super) fn apply_target_selection(&mut self) {
         let Some(selector) = self.selector.as_ref() else {
             return;
         };
@@ -854,7 +412,7 @@ impl TuiState {
         }
     }
 
-    fn apply_feature_selection(&mut self) {
+    pub(super) fn apply_feature_selection(&mut self) {
         let Some(selector) = self.selector.as_ref() else {
             return;
         };
@@ -906,7 +464,7 @@ impl TuiState {
         }
     }
 
-    fn apply_package_selection(&mut self) {
+    pub(super) fn apply_package_selection(&mut self) {
         let Some(selector) = self.selector.as_ref() else {
             return;
         };
@@ -956,136 +514,6 @@ impl TuiState {
             }
         } else if let Some(selector) = self.selector.as_mut() {
             selector.message = Some("Could not start dependency resolution".to_owned());
-        }
-    }
-
-    fn handle_tree_resolved(&mut self, result: TreeResolutionResult) {
-        if result.generation != self.resolution_generation {
-            return;
-        }
-
-        match result.result {
-            Ok(dependency_tree) => {
-                self.resolution_applying = false;
-                if let Some(format) = self.pending_format.take() {
-                    self.format = format;
-                }
-                self.search_generation = self.search_generation.wrapping_add(1);
-                self.search_query.clear();
-                self.search_running = false;
-                self.tree_options = result.options;
-                self.dependency_tree = dependency_tree;
-                self.tree_widget_state = TreeWidgetState::default();
-                self.metadata_popup.scroll = 0;
-                self.metadata_popup.invalidate_usage_tree();
-                if let Some(depth) = self.tree_options.resolution.depth {
-                    self.tree_widget_state
-                        .open_to_dependency_depth(&self.dependency_tree, depth);
-                } else {
-                    self.tree_widget_state.expand_all(&self.dependency_tree);
-                }
-                self.selector = None;
-                self.selector_kind = None;
-                self.input_mode = InputMode::Normal;
-                if self.invert_reverting {
-                    self.invert_restore = None;
-                    self.invert_target = None;
-                    self.invert_prompt = None;
-                    self.invert_reverting = false;
-                }
-            }
-            Err(error) => {
-                self.resolution_applying = false;
-                self.invert_reverting = false;
-                if self.invert_restore.is_some()
-                    && let Some(target) = &self.invert_target
-                {
-                    self.invert_prompt = Some(format!("{target} ({error})"));
-                }
-                if let Some(selector) = self.selector.as_mut() {
-                    selector.applying = false;
-                    selector.message = Some(error);
-                }
-            }
-        }
-    }
-
-    fn request_search(&mut self) {
-        self.search_generation += 1;
-        let request = SearchRequest {
-            generation: self.search_generation,
-            query: self.search_query.clone(),
-            dependency_tree: Arc::clone(&self.dependency_tree),
-        };
-
-        if request.query.is_empty() {
-            self.search_running = false;
-            self.tree_widget_state.clear_search();
-            return;
-        }
-
-        self.search_running = true;
-        let _ = self.search_tx.send(request);
-    }
-
-    fn clear_search(&mut self) {
-        self.input_mode = InputMode::Normal;
-        self.search_generation += 1;
-        self.search_query.clear();
-        self.search_running = false;
-        self.tree_widget_state.clear_search();
-    }
-
-    fn invert_selected_package(&mut self) {
-        let Some(node_id) = self.tree_widget_state.selected_node_id() else {
-            return;
-        };
-        let Some(DependencyNode::Crate(dependency)) = self.dependency_tree.node(node_id) else {
-            return;
-        };
-
-        let Some(package_id) = dependency.package_id else {
-            return;
-        };
-        let package_spec = package_id.to_spec().to_string();
-        if self.invert_restore.is_none() {
-            self.invert_restore = Some(self.tree_options.resolution.invert.clone());
-        }
-        let target = format!("{} v{}", dependency.name, dependency.version);
-        self.invert_target = Some(target.clone());
-        self.invert_prompt = Some(target.clone());
-        self.invert_reverting = false;
-
-        let mut options = self.tree_options.clone();
-        options.resolution.invert = Some(vec![package_spec]);
-        self.send_resolution(options);
-    }
-
-    fn restore_inverted_tree(&mut self) {
-        let Some(original_invert) = self.invert_restore.clone() else {
-            return;
-        };
-        let mut options = self.tree_options.clone();
-        options.resolution.invert = original_invert;
-        self.invert_reverting = true;
-        self.send_resolution(options);
-    }
-
-    fn send_resolution(&mut self, options: TreeOptions) {
-        self.resolution_generation = self.resolution_generation.wrapping_add(1);
-        let request = TreeResolutionRequest {
-            generation: self.resolution_generation,
-            format_requirements: self.format.requirements().with_metadata(),
-            options,
-        };
-        if self.resolution_tx.send(request).is_ok() {
-            self.resolution_applying = true;
-        } else {
-            self.invert_reverting = false;
-            if let Some(target) = &self.invert_target {
-                self.invert_prompt =
-                    Some(format!("{target} (could not start dependency resolution)"));
-            }
         }
     }
 }
@@ -1319,32 +747,4 @@ fn set_edge_options(options: &mut ResolutionOptions, selected: [bool; 3], featur
                 })
             }),
     );
-}
-
-fn open_url(url: &str) -> std::io::Result<()> {
-    #[cfg(any(unix, target_os = "windows"))]
-    {
-        #[cfg(target_os = "macos")]
-        let mut command = Command::new("open");
-        #[cfg(target_os = "windows")]
-        let mut command = Command::new("explorer.exe");
-        #[cfg(all(unix, not(target_os = "macos")))]
-        let mut command = Command::new("xdg-open");
-
-        command
-            .arg(url)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .map(|_| ())
-    }
-    #[cfg(not(any(unix, target_os = "windows")))]
-    {
-        let _ = url;
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "opening URLs is not supported on this platform",
-        ))
-    }
 }

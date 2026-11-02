@@ -5,7 +5,9 @@
 ## installation
 
 ```bash
-$ cargo install --git https://github.com/orhun/cargo-tree-tui.git
+cargo install cargo-tree-tui
+# or
+cargo install --git https://github.com/orhun/cargo-tree-tui.git
 ```
 
 ## usage
@@ -13,7 +15,7 @@ $ cargo install --git https://github.com/orhun/cargo-tree-tui.git
 in the root of your cargo project:
 
 ```bash
-$ cargo tree-tui
+cargo tree-tui
 ```
 
 ## talk
