@@ -177,6 +177,9 @@ impl TuiState {
             (KeyCode::Char('.'), _) => {
                 self.tree_widget_state.collapse_all(&self.dependency_tree);
             }
+            (KeyCode::Char(','), _) => {
+                self.tree_widget_state.expand_all(&self.dependency_tree);
+            }
             _ => {}
         }
         if self.show_metadata && self.tree_widget_state.selected_node_id() != selected_before {

@@ -27,6 +27,7 @@ const KEY_BINDINGS: &[(&str, &str)] = &[
     ("]", "Go to next sibling"),
     ("P", "Go to parent"),
     (".", "Collapse all"),
+    (",", "Expand all"),
     ("q", "Quit"),
 ];
 
