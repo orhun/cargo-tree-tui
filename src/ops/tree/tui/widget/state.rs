@@ -447,6 +447,28 @@ impl TreeWidgetState {
         }
     }
 
+    pub fn collapse_all(&mut self, tree: &DependencyTree) {
+        if !self.ensure_selection(tree) {
+            return;
+        }
+        self.ensure_visible_nodes(tree);
+        
+        // Using hardcoded node ID for root node as it is used elsewhere.
+        if let Some(root_node) = tree.node(NodeId(0)) {
+            let iter_ids = root_node.children().iter().map(|node_id| node_id.0);
+            for id in iter_ids {
+                // Ignoring else-arm as NodeId should never exceed arena size
+                if id <= self.open.len() {
+                    self.open[id] = false;
+                }
+            }
+        }
+
+        self.subtree_dirty = true;
+        self.dirty = true;
+        self.ensure_selection(tree);
+    }
+
     /// Opens all nodes up to the specified depth.
     pub fn open_to_depth(&mut self, tree: &DependencyTree, max_depth: usize) {
         if max_depth == 0 {
