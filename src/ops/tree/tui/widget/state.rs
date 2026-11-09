@@ -454,8 +454,8 @@ impl TreeWidgetState {
         self.ensure_visible_nodes(tree);
         
         // Using hardcoded node ID for root node as it is used elsewhere.
-        if let Some(dep_node) = tree.node(NodeId(0)) {
-            let iter_ids = dep_node.children().iter().map(|node_id| node_id.0);
+        if let Some(root_node) = tree.node(NodeId(0)) {
+            let iter_ids = root_node.children().iter().map(|node_id| node_id.0);
             for id in iter_ids {
                 // Ignoring else-arm as NodeId should never exceed arena size
                 if id <= self.open.len() {
